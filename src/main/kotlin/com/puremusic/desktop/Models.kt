@@ -63,12 +63,11 @@ data class LyricLine(
     val secondaryText: String? = null,
 )
 
+// Clean 4-Chapter Book-Index Navigation (100% aligned with Mobile)
 enum class DesktopTab(val label: String) {
     LIBRARY("曲库"),
     ALBUMS("专辑"),
     PLAYLISTS("歌单"),
-    REPORT("听歌报告"),
-    EQUALIZER("均衡器"),
     SETTINGS("设置"),
 }
 
@@ -85,12 +84,12 @@ enum class SortOrder(val label: String) {
     DURATION("按时长"),
 }
 
+// 4 Cohesive Immersive Scenes sharing ONE unified top/bottom control language
 enum class DesktopSceneStyle(val label: String) {
-    VINYL_STUDY("动感黑胶书房"),
+    VINYL_STUDY("黑胶书房"),
     VINYL_LIGHTFIELD("黑胶光场"),
-    POSTER_WALL("唱片海报墙"),
-    VINTAGE_HIFI("复古音响"),
     SPATIAL_GALLERY("空间唱片廊"),
+    POSTER_WALL("唱片海报墙"),
 }
 
 enum class DesktopSpectrumStyle(val label: String) {
@@ -116,9 +115,9 @@ enum class DesktopLayoutDensity(
     val gridSpacingDp: Int,
     val cardPaddingDp: Int,
 ) {
-    COMPACT("紧凑", 38, 5, 10, 12),
-    STANDARD("标准", 46, 9, 14, 16),
-    SPACIOUS("宽松", 54, 14, 18, 20),
+    COMPACT("紧凑", 38, 6, 12, 14),
+    STANDARD("标准", 44, 11, 16, 18),
+    SPACIOUS("宽松", 52, 16, 20, 22),
 }
 
 enum class RepeatMode(val label: String) {
@@ -152,7 +151,7 @@ data class DesktopConfig(
     val accentColor: DesktopAccentColor = DesktopAccentColor.CINNABAR,
     val layoutDensity: DesktopLayoutDensity = DesktopLayoutDensity.STANDARD,
     val fontScale: Float = 1.0f,
-    val sceneStyle: DesktopSceneStyle = DesktopSceneStyle.SPATIAL_GALLERY,
+    val sceneStyle: DesktopSceneStyle = DesktopSceneStyle.VINYL_STUDY,
     val spectrumStyle: DesktopSpectrumStyle = DesktopSpectrumStyle.SILK_RIBBON,
     val favoritePaths: Set<String> = emptySet(),
     val recentPaths: List<String> = emptyList(),

@@ -190,7 +190,7 @@ object DesktopConfigStore {
         var accent = DesktopAccentColor.CINNABAR
         var density = DesktopLayoutDensity.STANDARD
         var fontScale = 1.0f
-        var scene = DesktopSceneStyle.SPATIAL_GALLERY
+        var scene = DesktopSceneStyle.VINYL_STUDY
         var spectrum = DesktopSpectrumStyle.SILK_RIBBON
         var favs = emptySet<String>()
         var recents = emptyList<String>()
@@ -219,7 +219,7 @@ object DesktopConfigStore {
                     "accent" -> accent = DesktopAccentColor.entries.firstOrNull { it.name == v } ?: DesktopAccentColor.CINNABAR
                     "density" -> density = DesktopLayoutDensity.entries.firstOrNull { it.name == v } ?: DesktopLayoutDensity.STANDARD
                     "fontScale" -> fontScale = (v.toFloatOrNull() ?: 1.0f).coerceIn(0.85f, 1.25f)
-                    "scene" -> scene = DesktopSceneStyle.entries.firstOrNull { it.name == v } ?: DesktopSceneStyle.SPATIAL_GALLERY
+                    "scene" -> scene = DesktopSceneStyle.entries.firstOrNull { it.name == v } ?: DesktopSceneStyle.VINYL_STUDY
                     "spectrum" -> spectrum = DesktopSpectrumStyle.entries.firstOrNull { it.name == v } ?: DesktopSpectrumStyle.SILK_RIBBON
                     "favorites" -> favs = v.split('|').filter { it.isNotBlank() }.toSet()
                     "recents" -> recents = v.split('|').filter { it.isNotBlank() }

@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.puremusic.desktop"
-version = "2.3.1"
+version = "3.0.0"
 
 dependencies {
     implementation(compose.desktop.currentOs)
@@ -35,7 +35,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "PureMusic"
-            packageVersion = "2.3.1"
+            packageVersion = "3.0.0"
             description = "PureMusic - Native Offline Hi-Res Local Music Player"
             vendor = "PureMusic"
             includeAllModules = true
