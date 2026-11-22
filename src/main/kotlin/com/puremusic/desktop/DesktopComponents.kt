@@ -42,7 +42,6 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.composed
 import androidx.compose.foundation.rememberScrollbarAdapter
-import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -1746,26 +1745,6 @@ fun DesktopThinScrollbar(
     val ink = MaterialTheme.colorScheme.onSurface
     VerticalScrollbar(
         adapter = rememberScrollbarAdapter(listState),
-        modifier = modifier.fillMaxHeight().padding(vertical = 4.dp, horizontal = 2.dp),
-        style = ScrollbarStyle(
-            minimalHeight = 28.dp,
-            thickness = 4.dp,
-            shape = CircleShape,
-            hoverDurationMillis = 220,
-            unhoverColor = ink.copy(alpha = 0.14f),
-            hoverColor = ink.copy(alpha = 0.38f),
-        ),
-    )
-}
-
-@Composable
-fun DesktopThinGridScrollbar(
-    gridState: LazyGridState,
-    modifier: Modifier = Modifier,
-) {
-    val ink = MaterialTheme.colorScheme.onSurface
-    VerticalScrollbar(
-        adapter = rememberScrollbarAdapter(gridState),
         modifier = modifier.fillMaxHeight().padding(vertical = 4.dp, horizontal = 2.dp),
         style = ScrollbarStyle(
             minimalHeight = 28.dp,

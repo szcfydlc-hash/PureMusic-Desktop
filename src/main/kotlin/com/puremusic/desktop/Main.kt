@@ -15,7 +15,6 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Fullscreen
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.animation.slideOutHorizontally
@@ -48,9 +47,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -1608,37 +1604,46 @@ private fun DesktopAlbumsPane(
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp)) {
         Text("专辑", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(14.dp))
-        val albumsGridState = rememberLazyGridState()
-        Box(modifier = Modifier.fillMaxSize()) {
-        LazyVerticalGrid(
-            state = albumsGridState,
-            columns = GridCells.Adaptive(minSize = 156.dp),
-            modifier = Modifier.fillMaxSize().padding(end = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(density.gridSpacingDp.dp),
-            verticalArrangement = Arrangement.spacedBy((density.gridSpacingDp + 6).dp),
-        ) {
-            items(albums, key = { it.name }) { album ->
-                Column(
-                    modifier = Modifier
-                        .desktopHoverClickable(shape = RoundedCornerShape(10.dp)) { onSelectAlbum(album) }
-                        .padding(6.dp),
-                ) {
-                    DesktopAlbumCover(
-                        filePath = album.songs.firstOrNull()?.filePath,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(1f)
-                            .shadow(6.dp, RoundedCornerShape(8.dp)),
-                        cornerRadius = 8.dp,
-                        iconSize = 38.dp,
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(album.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${album.artist} · ${album.songs.size} 首", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        val albumsListState = rememberLazyListState()
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val cols = ((maxWidth.value / 176f).toInt()).coerceIn(3, 8)
+            val rows = remember(albums, cols) { albums.chunked(cols) }
+            LazyColumn(
+                state = albumsListState,
+                modifier = Modifier.fillMaxSize().padding(end = 10.dp),
+                verticalArrangement = Arrangement.spacedBy((density.gridSpacingDp + 6).dp),
+            ) {
+                items(rows, key = { row -> row.joinToString("|") { it.name } }) { rowAlbums ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(density.gridSpacingDp.dp),
+                    ) {
+                        rowAlbums.forEach { album ->
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .desktopHoverClickable(shape = RoundedCornerShape(10.dp)) { onSelectAlbum(album) }
+                                    .padding(6.dp),
+                            ) {
+                                DesktopAlbumCover(
+                                    filePath = album.songs.firstOrNull()?.filePath,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(1f)
+                                        .shadow(6.dp, RoundedCornerShape(8.dp)),
+                                    cornerRadius = 8.dp,
+                                    iconSize = 38.dp,
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(album.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${album.artist} · ${album.songs.size} 首", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        repeat(cols - rowAlbums.size) { Spacer(modifier = Modifier.weight(1f)) }
+                    }
                 }
             }
-        }
-        DesktopThinGridScrollbar(gridState = albumsGridState, modifier = Modifier.align(Alignment.CenterEnd))
+            DesktopThinScrollbar(listState = albumsListState, modifier = Modifier.align(Alignment.CenterEnd))
         }
     }
 }
