@@ -403,9 +403,18 @@ fun main() = application {
                 it.album.lowercase(Locale.getDefault()).contains(q)
         }
         when (sortOrder) {
-            SortOrder.TITLE -> base.sortedBy { it.title.lowercase(Locale.getDefault()) }
-            SortOrder.ARTIST -> base.sortedBy { it.artist.lowercase(Locale.getDefault()) }
-            SortOrder.ALBUM -> base.sortedBy { it.album.lowercase(Locale.getDefault()) }
+            SortOrder.TITLE -> base.sortedWith(
+                compareBy<DesktopSong> { DesktopAlphabetIndex.sortRank(DesktopAlphabetIndex.initialLetter(it.title)) }
+                    .thenBy { it.title.lowercase(Locale.getDefault()) },
+            )
+            SortOrder.ARTIST -> base.sortedWith(
+                compareBy<DesktopSong> { DesktopAlphabetIndex.sortRank(DesktopAlphabetIndex.initialLetter(it.artist)) }
+                    .thenBy { it.artist.lowercase(Locale.getDefault()) },
+            )
+            SortOrder.ALBUM -> base.sortedWith(
+                compareBy<DesktopSong> { DesktopAlphabetIndex.sortRank(DesktopAlphabetIndex.initialLetter(it.album)) }
+                    .thenBy { it.album.lowercase(Locale.getDefault()) },
+            )
             SortOrder.DURATION -> base.sortedByDescending { it.durationMs }
         }
     }
@@ -417,7 +426,10 @@ fun main() = application {
     val artists = remember(allSongs) {
         allSongs.groupBy { it.artist }
             .map { (name, list) -> DesktopArtist(name, list) }
-            .sortedBy { it.name.lowercase(Locale.getDefault()) }
+            .sortedWith(
+                compareBy<DesktopArtist> { DesktopAlphabetIndex.sortRank(DesktopAlphabetIndex.initialLetter(it.name)) }
+                    .thenBy { it.name.lowercase(Locale.getDefault()) },
+            )
     }
     val folders = remember(allSongs) {
         allSongs.groupBy { File(it.filePath).parent ?: it.folderName }
@@ -1643,8 +1655,38 @@ private fun DesktopLibraryPage(
                         }
                     } else {
                         val listState = rememberLazyListState()
+                        val listScope = rememberCoroutineScope()
+                        val showAlphaBar = sortOrder != SortOrder.DURATION
+                        val letterIndexMap = remember(songs, sortOrder) {
+                            val map = LinkedHashMap<String, Int>()
+                            songs.forEachIndexed { idx, s ->
+                                val keyText = when (sortOrder) {
+                                    SortOrder.TITLE -> s.title
+                                    SortOrder.ARTIST -> s.artist
+                                    SortOrder.ALBUM -> s.album
+                                    SortOrder.DURATION -> s.title
+                                }
+                                val letter = DesktopAlphabetIndex.initialLetter(keyText)
+                                map.putIfAbsent(letter, idx)
+                            }
+                            map
+                        }
+                        val firstVisibleIdx = listState.firstVisibleItemIndex
+                        val activeLetter = remember(firstVisibleIdx, songs, sortOrder) {
+                            val s = songs.getOrNull(firstVisibleIdx) ?: return@remember null
+                            val keyText = when (sortOrder) {
+                                SortOrder.TITLE -> s.title
+                                SortOrder.ARTIST -> s.artist
+                                SortOrder.ALBUM -> s.album
+                                SortOrder.DURATION -> s.title
+                            }
+                            DesktopAlphabetIndex.initialLetter(keyText)
+                        }
                         Box(modifier = Modifier.fillMaxSize()) {
-                            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(end = 10.dp)) {
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier.fillMaxSize().padding(end = if (showAlphaBar) 32.dp else 10.dp),
+                            ) {
                                 itemsIndexed(songs, key = { _, s -> s.id }) { idx, song ->
                                     BookTrackRow(
                                         index = idx + 1,
@@ -1658,6 +1700,22 @@ private fun DesktopLibraryPage(
                                     )
                                 }
                             }
+                            if (showAlphaBar) {
+                                DesktopAlphabetIndexBar(
+                                    availableLetters = letterIndexMap.keys,
+                                    activeLetter = activeLetter,
+                                    onSelectLetter = { picked ->
+                                        val target = letterIndexMap[picked] ?: run {
+                                            val rank = DesktopAlphabetIndex.sortRank(picked)
+                                            letterIndexMap.entries.firstOrNull { DesktopAlphabetIndex.sortRank(it.key) >= rank }?.value
+                                        }
+                                        if (target != null) {
+                                            listScope.launch { listState.scrollToItem(target) }
+                                        }
+                                    },
+                                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
+                                )
+                            }
                             DesktopThinScrollbar(listState = listState, modifier = Modifier.align(Alignment.CenterEnd))
                         }
                     }
@@ -1665,8 +1723,20 @@ private fun DesktopLibraryPage(
 
                 LibrarySubTab.ARTISTS -> {
                     val listState = rememberLazyListState()
+                    val listScope = rememberCoroutineScope()
+                    val artistLetterMap = remember(artists) {
+                        val map = LinkedHashMap<String, Int>()
+                        artists.forEachIndexed { idx, a ->
+                            map.putIfAbsent(DesktopAlphabetIndex.initialLetter(a.name), idx)
+                        }
+                        map
+                    }
+                    val firstArtistIdx = listState.firstVisibleItemIndex
+                    val activeArtistLetter = remember(firstArtistIdx, artists) {
+                        artists.getOrNull(firstArtistIdx)?.let { DesktopAlphabetIndex.initialLetter(it.name) }
+                    }
                     Box(modifier = Modifier.fillMaxSize()) {
-                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(end = 10.dp)) {
+                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(end = 32.dp)) {
                             items(artists, key = { it.name }) { artist ->
                                 Row(
                                     modifier = Modifier
@@ -1683,6 +1753,20 @@ private fun DesktopLibraryPage(
                                 HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline.copy(alpha = 0.65f))
                             }
                         }
+                        DesktopAlphabetIndexBar(
+                            availableLetters = artistLetterMap.keys,
+                            activeLetter = activeArtistLetter,
+                            onSelectLetter = { picked ->
+                                val target = artistLetterMap[picked] ?: run {
+                                    val rank = DesktopAlphabetIndex.sortRank(picked)
+                                    artistLetterMap.entries.firstOrNull { DesktopAlphabetIndex.sortRank(it.key) >= rank }?.value
+                                }
+                                if (target != null) {
+                                    listScope.launch { listState.scrollToItem(target) }
+                                }
+                            },
+                            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
+                        )
                         DesktopThinScrollbar(listState = listState, modifier = Modifier.align(Alignment.CenterEnd))
                     }
                 }
@@ -2762,7 +2846,7 @@ private fun DesktopSettingsPage(
                             Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
                             Text("回归音乐本身。纯粹、克制、安静陪伴每一张本地唱片。", fontSize = 12.sp, color = muted)
                         }
-                        Text("v3.1.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                        Text("v3.1.2", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
                     }
                 }
             }

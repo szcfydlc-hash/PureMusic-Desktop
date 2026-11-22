@@ -1965,3 +1965,172 @@ fun DesktopThinScrollbar(
         ),
     )
 }
+
+
+/**
+ * Zero-dependency A-Z & GB2312 Chinese Pinyin Initial Letter Mapper for Desktop Library Indexing.
+ */
+object DesktopAlphabetIndex {
+    val letters: List<String> = ('A'..'Z').map { it.toString() } + "#"
+
+    // Standard GB2312 Level-1 Pinyin boundary codes (A..Z, excluding I/U/V)
+    private val gbBounds = intArrayOf(
+        0xB0A1, 0xB0C5, 0xB2C1, 0xB4EE, 0xB6EA, 0xB7A2, 0xB8C1, 0xB9FE,
+        0xBBF7, 0xBFA6, 0xC0AC, 0xC2E8, 0xC4C3, 0xC5B6, 0xC5BE, 0xC6DA,
+        0xC8BB, 0xC8F6, 0xCBFA, 0xCDDA, 0xCEF4, 0xD1B9, 0xD4D1,
+    )
+    private val gbLetters = charArrayOf(
+        'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+        'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
+        'R', 'S', 'T', 'W', 'X', 'Y', 'Z',
+    )
+
+    fun initialLetter(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return "#"
+        val ch = trimmed[0]
+        if (ch in 'A'..'Z') return ch.toString()
+        if (ch in 'a'..'z') return ch.uppercaseChar().toString()
+        if (ch.code >= 0x4E00 && ch.code <= 0x9FFF) {
+            return runCatching {
+                val bytes = ch.toString().toByteArray(java.nio.charset.Charset.forName("GBK"))
+                if (bytes.size >= 2) {
+                    val code = ((bytes[0].toInt() and 0xFF) shl 8) or (bytes[1].toInt() and 0xFF)
+                    if (code >= gbBounds[0] && code <= 0xD7F9) {
+                        var idx = gbBounds.size - 1
+                        while (idx > 0 && code < gbBounds[idx]) idx--
+                        return gbLetters[idx].toString()
+                    }
+                }
+                "#"
+            }.getOrDefault("#")
+        }
+        return "#"
+    }
+
+    fun sortRank(letter: String): Int {
+        val c = letter.firstOrNull() ?: '#'
+        return if (c in 'A'..'Z') c - 'A' else 26
+    }
+}
+
+/**
+ * Quiet Bookbinding A-Z # Vertical Alphabet Index Rail with click/drag jumping and floating washi indicator bubble.
+ */
+@Composable
+fun DesktopAlphabetIndexBar(
+    availableLetters: Set<String>,
+    activeLetter: String?,
+    onSelectLetter: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val letters = DesktopAlphabetIndex.letters
+    var barHeightPx by remember { mutableFloatStateOf(1f) }
+    var draggingLetter by remember { mutableStateOf<String?>(null) }
+    var lastBubbleTriggerMs by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(lastBubbleTriggerMs) {
+        if (draggingLetter != null) {
+            kotlinx.coroutines.delay(750)
+            if (System.currentTimeMillis() - lastBubbleTriggerMs >= 700L) {
+                draggingLetter = null
+            }
+        }
+    }
+
+    fun letterAtY(y: Float): String {
+        val frac = (y / barHeightPx.coerceAtLeast(1f)).coerceIn(0f, 0.9999f)
+        val idx = (frac * letters.size).toInt().coerceIn(0, letters.lastIndex)
+        return letters[idx]
+    }
+
+    val accent = MaterialTheme.colorScheme.primary
+    val ink = MaterialTheme.colorScheme.onSurface
+    val surface = MaterialTheme.colorScheme.surface
+    val outline = MaterialTheme.colorScheme.outline
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        // Floating warm washi circular indicator badge while scrubbing or clicking
+        AnimatedVisibility(
+            visible = draggingLetter != null,
+            enter = fadeIn(tween(110)),
+            exit = fadeOut(tween(220)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .shadow(8.dp, CircleShape)
+                    .clip(CircleShape)
+                    .background(surface)
+                    .border(0.8.dp, accent.copy(alpha = 0.45f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = draggingLetter.orEmpty(),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = accent,
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .width(20.dp)
+                .fillMaxHeight()
+                .padding(vertical = 8.dp)
+                .onSizeChanged { barHeightPx = it.height.toFloat().coerceAtLeast(1f) }
+                .pointerHoverIcon(PointerIcon.Hand)
+                .pointerInput(availableLetters) {
+                    detectTapGestures { off ->
+                        val picked = letterAtY(off.y)
+                        draggingLetter = picked
+                        lastBubbleTriggerMs = System.currentTimeMillis()
+                        onSelectLetter(picked)
+                    }
+                }
+                .pointerInput(availableLetters) {
+                    detectVerticalDragGestures(
+                        onDragStart = { off ->
+                            val picked = letterAtY(off.y)
+                            draggingLetter = picked
+                            lastBubbleTriggerMs = System.currentTimeMillis()
+                            onSelectLetter(picked)
+                        },
+                        onVerticalDrag = { change, _ ->
+                            val picked = letterAtY(change.position.y)
+                            if (picked != draggingLetter) {
+                                draggingLetter = picked
+                                lastBubbleTriggerMs = System.currentTimeMillis()
+                                onSelectLetter(picked)
+                            }
+                        },
+                        onDragEnd = { lastBubbleTriggerMs = System.currentTimeMillis() },
+                        onDragCancel = { draggingLetter = null },
+                    )
+                },
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            letters.forEach { letter ->
+                val isSelected = (draggingLetter ?: activeLetter) == letter
+                val hasItems = letter in availableLetters
+                Text(
+                    text = letter,
+                    fontSize = if (isSelected) 10.5.sp else 9.5.sp,
+                    lineHeight = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = when {
+                        isSelected -> accent
+                        hasItems -> ink.copy(alpha = 0.68f)
+                        else -> ink.copy(alpha = 0.24f)
+                    },
+                )
+            }
+        }
+    }
+}

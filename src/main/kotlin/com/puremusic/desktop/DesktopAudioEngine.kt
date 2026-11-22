@@ -27,7 +27,7 @@ import kotlin.math.tanh
 
 /**
  * Bundled Native FFmpeg / FFprobe Locator (via org.bytedeco:ffmpeg windows-x86_64).
- * Zero external setup required; safely falls back to system PATH if present.
+ * Ensures sibling DLLs (avcodec/avformat/swresample) are always on ProcessBuilder PATH.
  */
 object DesktopFfmpegLocator {
     data class ProbedAudioMeta(
@@ -54,6 +54,18 @@ object DesktopFfmpegLocator {
         }.getOrNull() ?: findOnPath("ffprobe")
     }
 
+    fun configureProcessEnvironment(pb: ProcessBuilder, exePath: String) {
+        val exeFile = File(exePath)
+        val parentDir = exeFile.parentFile
+        if (parentDir != null && parentDir.exists()) {
+            pb.directory(parentDir)
+            val env = pb.environment()
+            val pathKey = env.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH"
+            val oldPath = env[pathKey].orEmpty()
+            env[pathKey] = if (oldPath.isBlank()) parentDir.absolutePath else "${parentDir.absolutePath}${File.pathSeparator}$oldPath"
+        }
+    }
+
     private fun findOnPath(exeName: String): String? {
         return runCatching {
             val isWin = System.getProperty("os.name").lowercase(Locale.US).contains("win")
@@ -76,6 +88,7 @@ object DesktopFfmpegLocator {
                 "-of", "default=noprint_wrappers=1",
                 file.absolutePath,
             )
+            configureProcessEnvironment(pb, probe)
             pb.redirectErrorStream(false)
             val proc = pb.start()
             var title: String? = null
@@ -119,6 +132,16 @@ object DesktopFfmpegLocator {
                 bitsPerSample = bitsPerSample,
             )
         }.getOrNull()
+    }
+
+    fun logDiagnostic(msg: String) {
+        runCatching {
+            val dir = File(System.getProperty("user.home"), ".puremusic")
+            if (!dir.exists()) dir.mkdirs()
+            val logFile = File(dir, "audio_debug.log")
+            if (logFile.exists() && logFile.length() > 128_000L) logFile.writeText("", StandardCharsets.UTF_8)
+            logFile.appendText("${System.currentTimeMillis()}: $msg\n", StandardCharsets.UTF_8)
+        }
     }
 }
 
@@ -340,7 +363,7 @@ class DesktopEqualizerDsp {
     @Volatile private var gainsDb: FloatArray = FloatArray(5)
     @Volatile private var dirty: Boolean = true
 
-    private var currentSampleRate = 48000.0
+    private var currentSampleRate = 44100.0
     private var preampGain = 1.0
     private var smoothedPreamp = 1.0
 
@@ -422,12 +445,11 @@ class DesktopEqualizerDsp {
 }
 
 /**
- * Native FFmpeg-backed Hi-Res PCM Playback Engine (with strict 4-byte frame alignment,
- * 64KB underrun-proof buffer, 8ms anti-pop fade-in ramp, instant -ss seeking, and
- * repaired JavaSound fallback).
- *
- * Supports MP3, FLAC (16/24/32-bit), WAV (incl. 24/32-bit float), M4A, AAC, ALAC,
- * OGG, OPUS, WMA, APE, WV, AIFF, and DSD (DSF/DFF) cleanly with zero static or crackle.
+ * Native FFmpeg-backed Hi-Res PCM Playback Engine (v3.1.1):
+ * - Uses universal swresample 44.1kHz 16-bit LE stereo PCM (compatible with 100% of LGPL FFmpeg builds & Windows drivers)
+ * - Configures ProcessBuilder working dir & PATH so Windows always resolves sibling avcodec/avformat DLLs
+ * - Verifies >0 PCM bytes written before treating EOF as completion; falls back seamlessly to repaired JavaSound if needed
+ * - Strict 4-byte frame alignment, 64KB underrun-proof buffer, and 8ms anti-pop soft fade-in ramp
  */
 class DesktopAudioEngine(
     private val onStateChanged: (isPlaying: Boolean, positionMs: Long, durationMs: Long) -> Unit,
@@ -469,7 +491,7 @@ class DesktopAudioEngine(
             runCatching { line.stop() }
             DesktopSpectrumBus.resetToIdle()
         } else {
-            pendingFadeInFrames = 384 // ~8ms soft resume ramp
+            pendingFadeInFrames = 352 // ~8ms soft resume ramp
             runCatching { line.start() }
         }
         onStateChanged(!isPaused, currentPositionMs, totalDurationMs)
@@ -540,10 +562,23 @@ class DesktopAudioEngine(
         }
     }
 
+    private fun openOutputLine(format: AudioFormat): SourceDataLine {
+        val info = DataLine.Info(SourceDataLine::class.java, format)
+        val line = AudioSystem.getLine(info) as SourceDataLine
+        try {
+            line.open(format, 65536)
+        } catch (_: Throwable) {
+            line.open(format)
+        }
+        applyGain(line, volumeLevel)
+        line.start()
+        return line
+    }
+
     private fun applySoftFadeIn(bytes: ByteArray, alignedLen: Int, channels: Int) {
         var remaining = pendingFadeInFrames
         if (remaining <= 0) return
-        val totalRamp = 384
+        val totalRamp = 352
         val frameBytes = channels * 2
         val frames = alignedLen / frameBytes
         for (f in 0 until frames) {
@@ -567,24 +602,40 @@ class DesktopAudioEngine(
 
     private fun runPlaybackLoop(file: File, startMs: Long) {
         val ffmpeg = DesktopFfmpegLocator.ffmpegPath
-        val completedNaturally = if (ffmpeg != null) {
-            runFfmpegPlayback(ffmpeg, file, startMs)
+        var completedNaturally = false
+
+        if (ffmpeg != null) {
+            val result = runFfmpegPlayback(ffmpeg, file, startMs)
+            if (result.producedAudio) {
+                completedNaturally = result.completedNaturally
+            } else if (!stopFlag.get()) {
+                DesktopFfmpegLocator.logDiagnostic("FFmpeg produced 0 bytes for ${file.name}, falling back to JavaSound")
+                completedNaturally = runJavaSoundFallback(file, startMs)
+            }
         } else {
-            runJavaSoundFallback(file, startMs)
+            completedNaturally = runJavaSoundFallback(file, startMs)
         }
+
         DesktopSpectrumBus.resetToIdle()
         if (completedNaturally && !stopFlag.get()) {
             onStateChanged(false, totalDurationMs, totalDurationMs)
             onTrackCompleted()
+        } else if (!stopFlag.get()) {
+            onStateChanged(false, currentPositionMs, totalDurationMs)
         }
     }
 
-    private fun runFfmpegPlayback(ffmpegExe: String, file: File, startMs: Long): Boolean {
+    private data class PlaybackOutcome(val producedAudio: Boolean, val completedNaturally: Boolean)
+
+    private fun runFfmpegPlayback(ffmpegExe: String, file: File, startMs: Long): PlaybackOutcome {
+        var producedAudio = false
         var completedNaturally = false
         var proc: Process? = null
         var line: SourceDataLine? = null
+        val errBuf = StringBuilder()
+
         try {
-            val targetRate = 48000f
+            val targetRate = 44100f
             val targetChannels = 2
             val frameBytes = targetChannels * 2 // 4 bytes per stereo 16-bit frame
             val decodedFormat = AudioFormat(
@@ -597,6 +648,7 @@ class DesktopAudioEngine(
                 false,
             )
 
+            // Universal LGPL-safe FFmpeg command (works on EVERY FFmpeg build without optional libsoxr!)
             val cmd = mutableListOf(
                 ffmpegExe,
                 "-hide_banner",
@@ -614,46 +666,38 @@ class DesktopAudioEngine(
                     "-f", "s16le",
                     "-acodec", "pcm_s16le",
                     "-ac", "2",
-                    "-ar", "48000",
-                    "-af", "aresample=resampler=soxr:dither_method=triangular",
+                    "-ar", "44100",
                     "pipe:1",
                 ),
             )
 
             val pb = ProcessBuilder(cmd)
+            DesktopFfmpegLocator.configureProcessEnvironment(pb, ffmpegExe)
             pb.redirectErrorStream(false)
             proc = pb.start()
             currentProcess = proc
 
-            // Drain stderr asynchronously so ffmpeg never blocks on stderr pipe
             val errThread = Thread({
                 runCatching {
-                    proc.errorStream.use { es ->
-                        val sink = ByteArray(1024)
-                        while (es.read(sink) != -1) { /* discard */ }
+                    BufferedReader(InputStreamReader(proc.errorStream, StandardCharsets.UTF_8)).use { br ->
+                        var l = br.readLine()
+                        while (l != null) {
+                            if (errBuf.length < 1024) errBuf.append(l).append(" | ")
+                            l = br.readLine()
+                        }
                     }
                 }
             }, "PureMusic-FFmpegErr")
             errThread.isDaemon = true
             errThread.start()
 
-            val info = DataLine.Info(SourceDataLine::class.java, decodedFormat)
-            val openedLine = AudioSystem.getLine(info) as SourceDataLine
-            // 64KB buffer (~341ms at 48kHz stereo 16-bit) eliminates Windows underrun crackle
-            openedLine.open(decodedFormat, 65536)
-            applyGain(openedLine, volumeLevel)
-            openedLine.start()
-            line = openedLine
-            currentLine = openedLine
-
             val bytesPerSecond = (targetRate * frameBytes).toLong()
             var bytesPlayed = (startMs * bytesPerSecond) / 1000L
-            pendingFadeInFrames = 384 // 8ms click-free fade-in
+            pendingFadeInFrames = 352 // 8ms click-free fade-in
 
             val buffer = ByteArray(8192)
             var carryCount = 0
             var lastUiEmit = 0L
-            onStateChanged(true, startMs, totalDurationMs)
 
             proc.inputStream.use { pcmIn ->
                 while (!stopFlag.get()) {
@@ -663,7 +707,7 @@ class DesktopAudioEngine(
                     }
                     val n = pcmIn.read(buffer, carryCount, buffer.size - carryCount)
                     if (n == -1) {
-                        completedNaturally = true
+                        if (producedAudio) completedNaturally = true
                         break
                     }
                     if (n > 0) {
@@ -671,10 +715,16 @@ class DesktopAudioEngine(
                         val alignedLen = (total / frameBytes) * frameBytes
                         val remainder = total - alignedLen
                         if (alignedLen > 0) {
+                            if (line == null) {
+                                line = openOutputLine(decodedFormat)
+                                currentLine = line
+                                onStateChanged(true, startMs, totalDurationMs)
+                            }
+                            producedAudio = true
                             equalizer.processPcm16LeInPlace(buffer, alignedLen, targetChannels, targetRate)
                             applySoftFadeIn(buffer, alignedLen, targetChannels)
                             DesktopSpectrumBus.feedPcm16Le(buffer, alignedLen, targetChannels)
-                            openedLine.write(buffer, 0, alignedLen)
+                            line?.write(buffer, 0, alignedLen)
                             bytesPlayed += alignedLen
                             val posMs = ((bytesPlayed * 1000L) / bytesPerSecond).coerceAtMost(totalDurationMs)
                             currentPositionMs = posMs
@@ -694,13 +744,13 @@ class DesktopAudioEngine(
             }
 
             if (completedNaturally && !stopFlag.get()) {
-                openedLine.drain()
+                line?.drain()
             }
-        } catch (_: Throwable) {
-            // If soxr resampler isn't compiled into a given ffmpeg build or file fails, fall back cleanly
-            if (!stopFlag.get() && !completedNaturally) {
-                return runFfmpegPlaybackSimple(ffmpegExe, file, startMs)
+            if (!producedAudio && errBuf.isNotEmpty()) {
+                DesktopFfmpegLocator.logDiagnostic("FFmpeg stderr: $errBuf")
             }
+        } catch (t: Throwable) {
+            DesktopFfmpegLocator.logDiagnostic("FFmpeg exception: ${t.javaClass.simpleName}: ${t.message}")
         } finally {
             runCatching { proc?.destroyForcibly() }
             if (currentProcess === proc) currentProcess = null
@@ -710,131 +760,7 @@ class DesktopAudioEngine(
             }
             if (currentLine === line) currentLine = null
         }
-        return completedNaturally
-    }
-
-    /**
-     * Secondary FFmpeg invocation without soxr filter (uses default swresample, guaranteed on every FFmpeg build).
-     */
-    private fun runFfmpegPlaybackSimple(ffmpegExe: String, file: File, startMs: Long): Boolean {
-        var completedNaturally = false
-        var proc: Process? = null
-        var line: SourceDataLine? = null
-        try {
-            val targetRate = 48000f
-            val targetChannels = 2
-            val frameBytes = targetChannels * 2
-            val decodedFormat = AudioFormat(
-                AudioFormat.Encoding.PCM_SIGNED,
-                targetRate,
-                16,
-                targetChannels,
-                frameBytes,
-                targetRate,
-                false,
-            )
-
-            val cmd = mutableListOf(ffmpegExe, "-hide_banner", "-loglevel", "error", "-nostdin")
-            if (startMs > 0L) {
-                cmd.add("-ss")
-                cmd.add(String.format(Locale.US, "%.3f", startMs / 1000.0))
-            }
-            cmd.addAll(
-                listOf(
-                    "-i", file.absolutePath,
-                    "-vn", "-sn", "-dn",
-                    "-f", "s16le",
-                    "-acodec", "pcm_s16le",
-                    "-ac", "2",
-                    "-ar", "48000",
-                    "pipe:1",
-                ),
-            )
-
-            proc = ProcessBuilder(cmd).start()
-            currentProcess = proc
-            val errThread = Thread({
-                runCatching {
-                    proc.errorStream.use { es ->
-                        val sink = ByteArray(1024)
-                        while (es.read(sink) != -1) { /* discard */ }
-                    }
-                }
-            }, "PureMusic-FFmpegErr2")
-            errThread.isDaemon = true
-            errThread.start()
-
-            val info = DataLine.Info(SourceDataLine::class.java, decodedFormat)
-            val openedLine = AudioSystem.getLine(info) as SourceDataLine
-            openedLine.open(decodedFormat, 65536)
-            applyGain(openedLine, volumeLevel)
-            openedLine.start()
-            line = openedLine
-            currentLine = openedLine
-
-            val bytesPerSecond = (targetRate * frameBytes).toLong()
-            var bytesPlayed = (startMs * bytesPerSecond) / 1000L
-            pendingFadeInFrames = 384
-
-            val buffer = ByteArray(8192)
-            var carryCount = 0
-            var lastUiEmit = 0L
-            onStateChanged(true, startMs, totalDurationMs)
-
-            proc.inputStream.use { pcmIn ->
-                while (!stopFlag.get()) {
-                    if (isPaused) {
-                        Thread.sleep(20)
-                        continue
-                    }
-                    val n = pcmIn.read(buffer, carryCount, buffer.size - carryCount)
-                    if (n == -1) {
-                        completedNaturally = true
-                        break
-                    }
-                    if (n > 0) {
-                        val total = carryCount + n
-                        val alignedLen = (total / frameBytes) * frameBytes
-                        val remainder = total - alignedLen
-                        if (alignedLen > 0) {
-                            equalizer.processPcm16LeInPlace(buffer, alignedLen, targetChannels, targetRate)
-                            applySoftFadeIn(buffer, alignedLen, targetChannels)
-                            DesktopSpectrumBus.feedPcm16Le(buffer, alignedLen, targetChannels)
-                            openedLine.write(buffer, 0, alignedLen)
-                            bytesPlayed += alignedLen
-                            val posMs = ((bytesPlayed * 1000L) / bytesPerSecond).coerceAtMost(totalDurationMs)
-                            currentPositionMs = posMs
-
-                            val now = System.currentTimeMillis()
-                            if (now - lastUiEmit >= 80L) {
-                                lastUiEmit = now
-                                onStateChanged(true, posMs, totalDurationMs)
-                            }
-                        }
-                        if (remainder > 0) {
-                            System.arraycopy(buffer, alignedLen, buffer, 0, remainder)
-                        }
-                        carryCount = remainder
-                    }
-                }
-            }
-            if (completedNaturally && !stopFlag.get()) {
-                openedLine.drain()
-            }
-        } catch (_: Throwable) {
-            if (!stopFlag.get() && !completedNaturally) {
-                return runJavaSoundFallback(file, startMs)
-            }
-        } finally {
-            runCatching { proc?.destroyForcibly() }
-            if (currentProcess === proc) currentProcess = null
-            runCatching {
-                line?.stop()
-                line?.close()
-            }
-            if (currentLine === line) currentLine = null
-        }
-        return completedNaturally
+        return PlaybackOutcome(producedAudio = producedAudio, completedNaturally = completedNaturally)
     }
 
     /**
@@ -859,16 +785,12 @@ class DesktopAudioEngine(
                 )
 
                 AudioSystem.getAudioInputStream(decodedFormat, rawStream).use { pcmStream ->
-                    val info = DataLine.Info(SourceDataLine::class.java, decodedFormat)
-                    val line = AudioSystem.getLine(info) as SourceDataLine
-                    line.open(decodedFormat, 65536)
-                    applyGain(line, volumeLevel)
-                    line.start()
+                    val line = openOutputLine(decodedFormat)
                     currentLine = line
 
                     val bytesPerSecond = (targetRate * frameBytes).toLong().coerceAtLeast(1L)
                     var bytesPlayed = (startMs * bytesPerSecond) / 1000L
-                    pendingFadeInFrames = 384
+                    pendingFadeInFrames = 352
 
                     if (startMs > 0L) {
                         var toSkip = (bytesPlayed / frameBytes) * frameBytes
@@ -932,8 +854,8 @@ class DesktopAudioEngine(
                     if (currentLine === line) currentLine = null
                 }
             }
-        } catch (_: Throwable) {
-            // Graceful recovery
+        } catch (t: Throwable) {
+            DesktopFfmpegLocator.logDiagnostic("JavaSound fallback exception for ${file.name}: ${t.javaClass.simpleName}: ${t.message}")
         }
         return completedNaturally
     }
