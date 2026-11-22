@@ -1,6 +1,8 @@
 package com.puremusic.desktop
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -87,8 +89,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -1533,9 +1533,10 @@ private fun DesktopPlaylistsPane(
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
-        contentPadding = PaddingValues(vertical = 18.dp),
+        modifier = Modifier.fillMaxHeight().widthIn(max = 980.dp).fillMaxWidth().padding(horizontal = 28.dp),
+        contentPadding = PaddingValues(vertical = 22.dp),
         verticalArrangement = Arrangement.spacedBy(density.gridSpacingDp.dp),
     ) {
         item(key = "pl_header") {
@@ -1770,6 +1771,7 @@ private fun DesktopPlaylistsPane(
             }
         }
     }
+    }
 }
 
 // =================================================================================================
@@ -1818,10 +1820,11 @@ private fun DesktopListeningReportPane(
         map.entries.sortedByDescending { it.value }.take(5).mapNotNull { (n, c) -> byName[n]?.let { it to c } }
     }
 
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
-        contentPadding = PaddingValues(vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxHeight().widthIn(max = 980.dp).fillMaxWidth().padding(horizontal = 28.dp),
+        contentPadding = PaddingValues(vertical = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item(key = "rep_hdr") {
             Text("听歌报告", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
@@ -1990,6 +1993,7 @@ private fun DesktopListeningReportPane(
             }
         }
     }
+    }
 }
 
 // =================================================================================================
@@ -2070,15 +2074,11 @@ private fun DesktopEqualizerPane(
                 val gain = (bandsDb.getOrNull(idx) ?: 0f).coerceIn(-10f, 10f)
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(freq, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(64.dp))
-                    Slider(
+                    DesktopSleekSlider(
                         value = gain,
                         onValueChange = { onBandChange(idx, it) },
                         valueRange = -10f..10f,
                         modifier = Modifier.weight(1f),
-                        colors = SliderDefaults.colors(
-                            thumbColor = MaterialTheme.colorScheme.primary,
-                            activeTrackColor = MaterialTheme.colorScheme.primary,
-                        ),
                     )
                     Text(
                         text = String.format(Locale.US, "%+.1f dB", gain),
@@ -2322,12 +2322,12 @@ private fun DesktopSettingsPane(
                                     Text("全局字号缩放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink)
                                     Text("当前 ${(config.fontScale * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, color = accent)
                                 }
-                                Slider(
+                                DesktopSleekSlider(
                                     value = config.fontScale,
                                     onValueChange = onFontScaleChange,
                                     valueRange = 0.85f..1.25f,
+                                    activeColor = accent,
                                     modifier = Modifier.weight(1f),
-                                    colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent),
                                 )
                             }
                         }
@@ -2424,7 +2424,7 @@ private fun DesktopSettingsPane(
                             Box(
                                 modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(accent.copy(alpha = 0.14f)).padding(horizontal = 12.dp, vertical = 6.dp),
                             ) {
-                                Text("v2.1.0", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                                Text("v2.2.0", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = accent)
                             }
                         }
                     }
@@ -2585,11 +2585,10 @@ private fun DesktopBottomPlaybackBar(
             }
             Row(modifier = Modifier.fillMaxWidth().height(18.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(formatDuration(playerState.positionMs), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(36.dp))
-                Slider(
+                DesktopSleekSlider(
                     value = if (playerState.durationMs > 0L) (playerState.positionMs.toFloat() / playerState.durationMs).coerceIn(0f, 1f) else 0f,
                     onValueChange = { frac -> if (playerState.durationMs > 0L) onSeekTo((frac * playerState.durationMs).toLong()) },
                     modifier = Modifier.weight(1f),
-                    colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
                 )
                 Text(formatDuration(playerState.durationMs), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(36.dp), textAlign = TextAlign.End)
             }
@@ -2598,12 +2597,11 @@ private fun DesktopBottomPlaybackBar(
         // Right: Volume + Full-Screen Immersive Trigger
         Row(modifier = Modifier.width(210.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
             Icon(Icons.AutoMirrored.Rounded.VolumeUp, contentDescription = "音量", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-            Slider(
+            DesktopSleekSlider(
                 value = playerState.volume,
                 onValueChange = onVolumeChange,
                 valueRange = 0f..1f,
-                modifier = Modifier.width(110.dp),
-                colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
+                modifier = Modifier.width(104.dp).padding(horizontal = 6.dp),
             )
             if (song != null) {
                 IconButton(onClick = onOpenImmersive, modifier = Modifier.size(32.dp)) {
@@ -2652,12 +2650,30 @@ private fun DesktopImmersiveStage(
         DesktopSceneStyle.SPATIAL_GALLERY,
         -> true
     }
+    val extractedMood = rememberSongDominantColor(song.filePath)
+    val animatedMood by animateColorAsState(
+        targetValue = extractedMood,
+        animationSpec = tween(650),
+        label = "immersiveMoodColor",
+    )
     val bgBrush = when (sceneStyle) {
         DesktopSceneStyle.VINYL_STUDY -> Brush.verticalGradient(listOf(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.background))
-        DesktopSceneStyle.VINYL_LIGHTFIELD -> Brush.verticalGradient(listOf(Color(0xFF3E221D), Color(0xFF2B1714), Color(0xFF1A0E0C)))
+        DesktopSceneStyle.VINYL_LIGHTFIELD -> Brush.verticalGradient(
+            listOf(
+                lerp(Color(0xFF1D1615), animatedMood, 0.52f),
+                lerp(Color(0xFF140F0F), animatedMood, 0.34f),
+                Color(0xFF0C0A0A),
+            ),
+        )
         DesktopSceneStyle.POSTER_WALL -> Brush.verticalGradient(listOf(Color(0xFF0E1116), Color(0xFF0A0C10)))
-        DesktopSceneStyle.VINTAGE_HIFI -> Brush.verticalGradient(listOf(Color(0xFF4B433B), Color(0xFF37312B), Color(0xFF211D19)))
-        DesktopSceneStyle.SPATIAL_GALLERY -> Brush.verticalGradient(listOf(Color(0xFF231317), Color(0xFF140D10), Color(0xFF0A0809)))
+        DesktopSceneStyle.VINTAGE_HIFI -> Brush.verticalGradient(listOf(Color(0xFF534A41), Color(0xFF3C352E), Color(0xFF221E1A)))
+        DesktopSceneStyle.SPATIAL_GALLERY -> Brush.verticalGradient(
+            listOf(
+                lerp(Color(0xFF181214), animatedMood, 0.42f),
+                lerp(Color(0xFF100C0E), animatedMood, 0.24f),
+                Color(0xFF090809),
+            ),
+        )
     }
     val primaryInk = if (isDarkScene) Color(0xFFF5F0E6) else MaterialTheme.colorScheme.onBackground
     val secondaryInk = if (isDarkScene) Color(0xFFB5ACA0) else MaterialTheme.colorScheme.onSurfaceVariant
@@ -2883,6 +2899,21 @@ private fun DesktopImmersiveStage(
 
                 // 4. 复古音响 (Reference #4: Sunlit Upper Showcase + Walnut Brushed-Aluminum Dual-VU Stereo Receiver)
                 DesktopSceneStyle.VINTAGE_HIFI -> {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        // Soft warm afternoon sunlit window rays on upper right studio wall
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    0.0f to Color(0xFFFFE1B0).copy(alpha = 0.22f),
+                                    0.55f to Color(0xFFE0B47A).copy(alpha = 0.08f),
+                                    1.0f to Color.Transparent,
+                                    center = Offset(size.width * 0.84f, size.height * 0.20f),
+                                    radius = size.width * 0.48f,
+                                ),
+                                radius = size.width * 0.48f,
+                                center = Offset(size.width * 0.84f, size.height * 0.20f),
+                            )
+                        }
                     Column(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.SpaceBetween,
@@ -2935,6 +2966,7 @@ private fun DesktopImmersiveStage(
                             onSeekTo = onSeekTo,
                             onVolumeChange = onVolumeChange,
                         )
+                    }
                     }
                 }
 
