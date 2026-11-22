@@ -8,6 +8,18 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
@@ -172,7 +184,16 @@ fun main() = application {
     var showMiniVinylWindow by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(true) }
 
-    var playerState by remember { mutableStateOf(DesktopPlayerState()) }
+    var playerState by remember {
+        mutableStateOf(
+            DesktopPlayerState(
+                volume = initialConfig.volume,
+                repeatMode = initialConfig.repeatMode,
+                shuffleEnabled = initialConfig.shuffleEnabled,
+            ),
+        )
+    }
+    var showQueueDrawer by remember { mutableStateOf(false) }
     var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
 
     // Sleep timer state (null = off, remaining seconds)
@@ -217,7 +238,7 @@ fun main() = application {
             val nextHourly = cfg.hourlyPlays.toMutableMap().apply {
                 this[hour] = (this[hour] ?: 0) + 1
             }
-            cfg.copy(recentPaths = nextRecent, playCounts = nextCounts, hourlyPlays = nextHourly)
+            cfg.copy(recentPaths = nextRecent, playCounts = nextCounts, hourlyPlays = nextHourly, lastSongPath = song.filePath)
         }
     }
 
@@ -261,7 +282,10 @@ fun main() = application {
         )
     }
 
-    // Keep EQ DSP synchronized with config
+    // Keep EQ DSP & initial volume synchronized with config
+    LaunchedEffect(Unit) {
+        engine.setVolume(initialConfig.volume)
+    }
     LaunchedEffect(config.eqEnabled, config.eqBandsDb) {
         engine.equalizer.update(config.eqEnabled, config.eqBandsDb)
     }
@@ -296,6 +320,17 @@ fun main() = application {
             val scanned = withContext(Dispatchers.IO) { DesktopLibraryScanner.scanFolders(folders) }
             allSongs = scanned
             if (activeQueue.isEmpty()) activeQueue = scanned
+            if (playerState.currentSong == null && config.lastSongPath != null) {
+                val lastIdx = scanned.indexOfFirst { it.filePath == config.lastSongPath }
+                if (lastIdx >= 0) {
+                    val restored = scanned[lastIdx]
+                    currentIndex = lastIdx
+                    playerState = playerState.copy(currentSong = restored, durationMs = restored.durationMs)
+                    scope.launch(Dispatchers.IO) {
+                        currentLyrics = DesktopLibraryScanner.loadLyricsForSong(restored)
+                    }
+                }
+            }
             isScanning = false
         }
     }
@@ -412,29 +447,38 @@ fun main() = application {
 
     val scale = config.fontScale.coerceIn(0.85f, 1.25f)
     val baseTypo = Typography()
+    val uiSans = DesktopTypographyFamilies.uiSans
     val scaledTypo = Typography(
-        headlineMedium = baseTypo.headlineMedium.copy(fontSize = baseTypo.headlineMedium.fontSize * scale),
-        titleLarge = baseTypo.titleLarge.copy(fontSize = baseTypo.titleLarge.fontSize * scale),
-        titleMedium = baseTypo.titleMedium.copy(fontSize = baseTypo.titleMedium.fontSize * scale),
-        titleSmall = baseTypo.titleSmall.copy(fontSize = baseTypo.titleSmall.fontSize * scale),
-        bodyLarge = baseTypo.bodyLarge.copy(fontSize = baseTypo.bodyLarge.fontSize * scale),
-        bodyMedium = baseTypo.bodyMedium.copy(fontSize = baseTypo.bodyMedium.fontSize * scale),
-        bodySmall = baseTypo.bodySmall.copy(fontSize = baseTypo.bodySmall.fontSize * scale),
-        labelLarge = baseTypo.labelLarge.copy(fontSize = baseTypo.labelLarge.fontSize * scale),
-        labelMedium = baseTypo.labelMedium.copy(fontSize = baseTypo.labelMedium.fontSize * scale),
-        labelSmall = baseTypo.labelSmall.copy(fontSize = baseTypo.labelSmall.fontSize * scale),
+        headlineMedium = baseTypo.headlineMedium.copy(fontFamily = uiSans, fontSize = baseTypo.headlineMedium.fontSize * scale),
+        headlineSmall = baseTypo.headlineSmall.copy(fontFamily = uiSans, fontSize = baseTypo.headlineSmall.fontSize * scale),
+        titleLarge = baseTypo.titleLarge.copy(fontFamily = uiSans, fontSize = baseTypo.titleLarge.fontSize * scale),
+        titleMedium = baseTypo.titleMedium.copy(fontFamily = uiSans, fontSize = baseTypo.titleMedium.fontSize * scale),
+        titleSmall = baseTypo.titleSmall.copy(fontFamily = uiSans, fontSize = baseTypo.titleSmall.fontSize * scale),
+        bodyLarge = baseTypo.bodyLarge.copy(fontFamily = uiSans, fontSize = baseTypo.bodyLarge.fontSize * scale),
+        bodyMedium = baseTypo.bodyMedium.copy(fontFamily = uiSans, fontSize = baseTypo.bodyMedium.fontSize * scale),
+        bodySmall = baseTypo.bodySmall.copy(fontFamily = uiSans, fontSize = baseTypo.bodySmall.fontSize * scale),
+        labelLarge = baseTypo.labelLarge.copy(fontFamily = uiSans, fontSize = baseTypo.labelLarge.fontSize * scale),
+        labelMedium = baseTypo.labelMedium.copy(fontFamily = uiSans, fontSize = baseTypo.labelMedium.fontSize * scale),
+        labelSmall = baseTypo.labelSmall.copy(fontFamily = uiSans, fontSize = baseTypo.labelSmall.fontSize * scale),
     )
 
     val mainWindowState = rememberWindowState(
-        size = DpSize(1200.dp, 780.dp),
+        size = DpSize(initialConfig.windowWidthDp.dp, initialConfig.windowHeightDp.dp),
         position = WindowPosition(Alignment.Center),
     )
 
+    fun saveAndExit() {
+        if (mainWindowState.placement == WindowPlacement.Floating) {
+            val w = mainWindowState.size.width.value.toInt().coerceIn(900, 3840)
+            val h = mainWindowState.size.height.value.toInt().coerceIn(600, 2160)
+            DesktopConfigStore.save(config.copy(windowWidthDp = w, windowHeightDp = h))
+        }
+        engine.stop()
+        exitApplication()
+    }
+
     Window(
-        onCloseRequest = {
-            engine.stop()
-            exitApplication()
-        },
+        onCloseRequest = { saveAndExit() },
         state = mainWindowState,
         title = "简约音乐 · PureMusic",
         undecorated = true,
@@ -448,8 +492,18 @@ fun main() = application {
                             true
                         } else false
                     }
+                    Key.F11 -> {
+                        mainWindowState.placement = if (mainWindowState.placement == WindowPlacement.Fullscreen) {
+                            WindowPlacement.Floating
+                        } else {
+                            WindowPlacement.Fullscreen
+                        }
+                        true
+                    }
                     Key.Escape -> {
                         when {
+                            mainWindowState.placement == WindowPlacement.Fullscreen -> { mainWindowState.placement = WindowPlacement.Floating; true }
+                            showQueueDrawer -> { showQueueDrawer = false; true }
                             showImmersiveStage -> { showImmersiveStage = false; true }
                             activeDetail != null -> { activeDetail = null; true }
                             else -> false
@@ -488,7 +542,21 @@ fun main() = application {
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     // Frameless Quiet-Luxury Title Bar
-                    WindowDraggableArea(modifier = Modifier.fillMaxWidth()) {
+                    WindowDraggableArea(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onDoubleTap = {
+                                        mainWindowState.placement = if (mainWindowState.placement == WindowPlacement.Maximized) {
+                                            WindowPlacement.Floating
+                                        } else {
+                                            WindowPlacement.Maximized
+                                        }
+                                    },
+                                )
+                            },
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -575,10 +643,7 @@ fun main() = application {
                                     Icon(Icons.Rounded.CropSquare, contentDescription = "最大化", modifier = Modifier.size(15.dp))
                                 }
                                 IconButton(
-                                    onClick = {
-                                        engine.stop()
-                                        exitApplication()
-                                    },
+                                    onClick = { saveAndExit() },
                                     modifier = Modifier.size(30.dp),
                                 ) {
                                     Icon(Icons.Rounded.Close, contentDescription = "关闭", modifier = Modifier.size(16.dp))
@@ -616,7 +681,7 @@ fun main() = application {
                                             .fillMaxWidth()
                                             .clip(itemShape)
                                             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                                            .clickable {
+                                            .desktopHoverClickable(shape = itemShape) {
                                                 activeTab = tab
                                                 activeDetail = null
                                             }
@@ -819,7 +884,11 @@ fun main() = application {
                                 cfg.copy(favoritePaths = next)
                             }
                         },
-                        onToggleShuffle = { playerState = playerState.copy(shuffleEnabled = !playerState.shuffleEnabled) },
+                        onToggleShuffle = {
+                            val next = !playerState.shuffleEnabled
+                            playerState = playerState.copy(shuffleEnabled = next)
+                            updateConfig { it.copy(shuffleEnabled = next) }
+                        },
                         onCycleRepeat = {
                             val next = when (playerState.repeatMode) {
                                 RepeatMode.OFF -> RepeatMode.ALL
@@ -827,18 +896,30 @@ fun main() = application {
                                 RepeatMode.ONE -> RepeatMode.OFF
                             }
                             playerState = playerState.copy(repeatMode = next)
+                            updateConfig { it.copy(repeatMode = next) }
                         },
                         onSkipPrevious = { skipPrevious() },
                         onTogglePlayPause = {
-                            if (playerState.currentSong != null) engine.togglePlayPause()
-                            else if (allSongs.isNotEmpty()) playFromQueue(allSongs, 0)
+                            val cur = playerState.currentSong
+                            if (cur != null) {
+                                if (playerState.positionMs == 0L && !playerState.isPlaying && currentIndex in activeQueue.indices) {
+                                    playFromQueue(activeQueue, currentIndex)
+                                } else {
+                                    engine.togglePlayPause()
+                                }
+                            } else if (allSongs.isNotEmpty()) {
+                                playFromQueue(allSongs, 0)
+                            }
                         },
                         onSkipNext = { skipNext() },
                         onSeekTo = { engine.seekTo(it) },
                         onVolumeChange = { vol ->
                             playerState = playerState.copy(volume = vol)
                             engine.setVolume(vol)
+                            updateConfig { it.copy(volume = vol) }
                         },
+                        queueOpen = showQueueDrawer,
+                        onToggleQueue = { showQueueDrawer = !showQueueDrawer },
                     )
                 }
 
@@ -900,8 +981,72 @@ fun main() = application {
                             onVolumeChange = { vol ->
                                 playerState = playerState.copy(volume = vol)
                                 engine.setVolume(vol)
+                                updateConfig { it.copy(volume = vol) }
+                            },
+                            isFullscreen = mainWindowState.placement == WindowPlacement.Fullscreen,
+                            onToggleFullscreen = {
+                                mainWindowState.placement = if (mainWindowState.placement == WindowPlacement.Fullscreen) {
+                                    WindowPlacement.Floating
+                                } else {
+                                    WindowPlacement.Fullscreen
+                                }
                             },
                         )
+                    }
+                }
+
+                // Right-Side Sliding Play Queue Drawer
+                AnimatedVisibility(
+                    visible = showQueueDrawer && !showImmersiveStage,
+                    enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(tween(180)),
+                    exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(tween(150)),
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(top = 42.dp, bottom = 74.dp),
+                ) {
+                    val queueListState = rememberLazyListState()
+                    Box(
+                        modifier = Modifier
+                            .width(340.dp)
+                            .fillMaxHeight()
+                            .shadow(18.dp)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.98f))
+                            .border(0.75.dp, MaterialTheme.colorScheme.outline),
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("播放队列 (${activeQueue.size})", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                IconButton(onClick = { showQueueDrawer = false }, modifier = Modifier.size(28.dp)) {
+                                    Icon(Icons.Rounded.Close, contentDescription = "关闭队列", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            HorizontalDivider(thickness = 0.6.dp, color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(vertical = 8.dp))
+                            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                                LazyColumn(state = queueListState, modifier = Modifier.fillMaxSize()) {
+                                    itemsIndexed(activeQueue, key = { i, s -> "${s.id}_$i" }) { idx, s ->
+                                        val isCur = idx == currentIndex
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .desktopHoverClickable(shape = RoundedCornerShape(8.dp)) { playFromQueue(activeQueue, idx) }
+                                                .background(if (isCur) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent, RoundedCornerShape(8.dp))
+                                                .padding(horizontal = 8.dp, vertical = 7.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            DesktopAlbumCover(filePath = s.filePath, modifier = Modifier.size(34.dp), cornerRadius = 5.dp, iconSize = 14.dp)
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(s.title, style = MaterialTheme.typography.bodySmall, fontWeight = if (isCur) FontWeight.Bold else FontWeight.Medium, color = if (isCur) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                Text(s.artist, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            }
+                                        }
+                                    }
+                                }
+                                DesktopThinScrollbar(listState = queueListState, modifier = Modifier.align(Alignment.CenterEnd))
+                            }
+                        }
                     }
                 }
 
@@ -914,6 +1059,8 @@ fun main() = application {
                 var newName by remember { mutableStateOf("") }
                 AlertDialog(
                     onDismissRequest = { showCreatePlaylistDialog = false },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
                     title = { Text("新建歌单") },
                     text = {
                         OutlinedTextField(
@@ -946,6 +1093,8 @@ fun main() = application {
                 var editName by remember(targetPl.id) { mutableStateOf(targetPl.name) }
                 AlertDialog(
                     onDismissRequest = { renamingPlaylist = null },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
                     title = { Text("重命名歌单") },
                     text = {
                         OutlinedTextField(
@@ -981,6 +1130,8 @@ fun main() = application {
             addingSongToPlaylist?.let { targetSong ->
                 AlertDialog(
                     onDismissRequest = { addingSongToPlaylist = null },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
                     title = { Text("添加到歌单") },
                     text = {
                         if (config.playlists.isEmpty()) {
@@ -1143,7 +1294,7 @@ private fun DesktopLibraryPane(
 ) {
     var sortMenuExpanded by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1271,7 +1422,9 @@ private fun DesktopLibraryPane(
                         }
                     }
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    val songsListState = rememberLazyListState()
+                    Box(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(state = songsListState, modifier = Modifier.fillMaxSize().padding(end = 8.dp)) {
                         itemsIndexed(songs, key = { _, s -> s.id }) { idx, song ->
                             DesktopSongRow(
                                 song = song,
@@ -1283,6 +1436,8 @@ private fun DesktopLibraryPane(
                                 onAddToPlaylist = { onAddToPlaylist(song) },
                             )
                         }
+                    }
+                    DesktopThinScrollbar(listState = songsListState, modifier = Modifier.align(Alignment.CenterEnd))
                     }
                 }
             }
@@ -1369,7 +1524,7 @@ private fun DesktopSongRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent)
-            .clickable(onClick = onClick)
+            .desktopHoverClickable(shape = RoundedCornerShape(10.dp), onClick = onClick)
             .padding(horizontal = 10.dp, vertical = density.rowPaddingDp.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1450,20 +1605,23 @@ private fun DesktopAlbumsPane(
     density: DesktopLayoutDensity,
     onSelectAlbum: (DesktopAlbum) -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp)) {
         Text("专辑", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(14.dp))
+        val albumsGridState = rememberLazyGridState()
+        Box(modifier = Modifier.fillMaxSize()) {
         LazyVerticalGrid(
+            state = albumsGridState,
             columns = GridCells.Adaptive(minSize = 156.dp),
+            modifier = Modifier.fillMaxSize().padding(end = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(density.gridSpacingDp.dp),
             verticalArrangement = Arrangement.spacedBy((density.gridSpacingDp + 6).dp),
         ) {
             items(albums, key = { it.name }) { album ->
                 Column(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { onSelectAlbum(album) }
-                        .padding(4.dp),
+                        .desktopHoverClickable(shape = RoundedCornerShape(10.dp)) { onSelectAlbum(album) }
+                        .padding(6.dp),
                 ) {
                     DesktopAlbumCover(
                         filePath = album.songs.firstOrNull()?.filePath,
@@ -1479,6 +1637,8 @@ private fun DesktopAlbumsPane(
                     Text("${album.artist} · ${album.songs.size} 首", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+        }
+        DesktopThinGridScrollbar(gridState = albumsGridState, modifier = Modifier.align(Alignment.CenterEnd))
         }
     }
 }
@@ -1533,8 +1693,10 @@ private fun DesktopPlaylistsPane(
         }
     }
 
+    val playlistsListState = rememberLazyListState()
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     LazyColumn(
+        state = playlistsListState,
         modifier = Modifier.fillMaxHeight().widthIn(max = 980.dp).fillMaxWidth().padding(horizontal = 28.dp),
         contentPadding = PaddingValues(vertical = 22.dp),
         verticalArrangement = Arrangement.spacedBy(density.gridSpacingDp.dp),
@@ -1758,7 +1920,13 @@ private fun DesktopPlaylistsPane(
                                     IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
                                         Icon(Icons.Rounded.MoreVert, contentDescription = "操作", modifier = Modifier.size(16.dp))
                                     }
-                                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenu(
+                                        expanded = menuOpen,
+                                        onDismissRequest = { menuOpen = false },
+                                        modifier = Modifier
+                                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                                            .border(0.75.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)),
+                                    ) {
                                         DropdownMenuItem(text = { Text("重命名") }, onClick = { menuOpen = false; onRenamePlaylist(pl) })
                                         DropdownMenuItem(text = { Text("删除歌单", color = accent) }, onClick = { menuOpen = false; onDeletePlaylist(pl) })
                                     }
@@ -1771,6 +1939,7 @@ private fun DesktopPlaylistsPane(
             }
         }
     }
+    DesktopThinScrollbar(listState = playlistsListState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -1820,8 +1989,10 @@ private fun DesktopListeningReportPane(
         map.entries.sortedByDescending { it.value }.take(5).mapNotNull { (n, c) -> byName[n]?.let { it to c } }
     }
 
+    val reportListState = rememberLazyListState()
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     LazyColumn(
+        state = reportListState,
         modifier = Modifier.fillMaxHeight().widthIn(max = 980.dp).fillMaxWidth().padding(horizontal = 28.dp),
         contentPadding = PaddingValues(vertical = 22.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -1993,6 +2164,7 @@ private fun DesktopListeningReportPane(
             }
         }
     }
+    DesktopThinScrollbar(listState = reportListState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -2012,8 +2184,9 @@ private fun DesktopEqualizerPane(
     val maxBoost = bandsDb.maxOrNull()?.coerceAtLeast(0f) ?: 0f
     val headroomDb = if (enabled && maxBoost > 0.5f) -(maxBoost * 0.85f) else 0f
 
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp),
+        modifier = Modifier.fillMaxHeight().widthIn(max = 980.dp).fillMaxWidth().padding(horizontal = 28.dp, vertical = 22.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -2091,6 +2264,7 @@ private fun DesktopEqualizerPane(
             }
         }
     }
+    }
 }
 
 // =================================================================================================
@@ -2122,13 +2296,15 @@ private fun DesktopSettingsPane(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter,
     ) {
+        val settingsListState = rememberLazyListState()
         LazyColumn(
+            state = settingsListState,
             modifier = Modifier
                 .fillMaxHeight()
                 .widthIn(max = 860.dp)
                 .fillMaxWidth()
                 .padding(horizontal = 28.dp),
-            contentPadding = PaddingValues(vertical = 24.dp),
+            contentPadding = PaddingValues(vertical = 22.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             item(key = "set_hdr") {
@@ -2404,7 +2580,7 @@ private fun DesktopSettingsPane(
                             HorizontalDivider(thickness = 0.6.dp, color = outline)
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("快捷键一览", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = ink)
-                                Text("• Space：播放 / 暂停     • Esc：退出沉浸全屏或详情页     • ← / →：全屏模式下快退 / 快进 5 秒", style = MaterialTheme.typography.bodySmall, color = muted)
+                                Text("• Space：播放 / 暂停     • F11：真全屏切换     • Esc：退出全屏 / 队列 / 详情     • ← / →：全屏快退 / 快进 5 秒", style = MaterialTheme.typography.bodySmall, color = muted)
                             }
                         }
                     }
@@ -2424,13 +2600,14 @@ private fun DesktopSettingsPane(
                             Box(
                                 modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(accent.copy(alpha = 0.14f)).padding(horizontal = 12.dp, vertical = 6.dp),
                             ) {
-                                Text("v2.2.0", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                                Text("v2.3.1", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = accent)
                             }
                         }
                     }
                 }
             }
         }
+        DesktopThinScrollbar(listState = settingsListState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -2450,7 +2627,8 @@ private fun DesktopSongCollectionDetail(
     onToggleFavorite: (String) -> Unit,
     onAddToPlaylist: (DesktopSong) -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp)) {
+    val detailListState = rememberLazyListState()
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
@@ -2478,7 +2656,8 @@ private fun DesktopSongCollectionDetail(
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        LazyColumn(state = detailListState, modifier = Modifier.fillMaxSize().padding(end = 8.dp)) {
             itemsIndexed(songs, key = { _, s -> s.id }) { idx, song ->
                 DesktopSongRow(
                     song = song,
@@ -2490,6 +2669,8 @@ private fun DesktopSongCollectionDetail(
                     onAddToPlaylist = { onAddToPlaylist(song) },
                 )
             }
+        }
+        DesktopThinScrollbar(listState = detailListState, modifier = Modifier.align(Alignment.CenterEnd))
         }
     }
 }
@@ -2510,6 +2691,8 @@ private fun DesktopBottomPlaybackBar(
     onSkipNext: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onVolumeChange: (Float) -> Unit,
+    queueOpen: Boolean = false,
+    onToggleQueue: () -> Unit = {},
 ) {
     val song = playerState.currentSong
     Row(
@@ -2594,17 +2777,25 @@ private fun DesktopBottomPlaybackBar(
             }
         }
 
-        // Right: Volume + Full-Screen Immersive Trigger
-        Row(modifier = Modifier.width(210.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+        // Right: Volume + Play Queue Drawer + Full-Screen Immersive Trigger
+        Row(modifier = Modifier.width(246.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
             Icon(Icons.AutoMirrored.Rounded.VolumeUp, contentDescription = "音量", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
             DesktopSleekSlider(
                 value = playerState.volume,
                 onValueChange = onVolumeChange,
                 valueRange = 0f..1f,
-                modifier = Modifier.width(104.dp).padding(horizontal = 6.dp),
+                modifier = Modifier.width(100.dp).padding(horizontal = 6.dp),
             )
+            IconButton(onClick = onToggleQueue, modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                Icon(
+                    imageVector = Icons.Rounded.QueueMusic,
+                    contentDescription = "播放队列",
+                    tint = if (queueOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
             if (song != null) {
-                IconButton(onClick = onOpenImmersive, modifier = Modifier.size(32.dp)) {
+                IconButton(onClick = onOpenImmersive, modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand)) {
                     Icon(Icons.Rounded.OpenInFull, contentDescription = "沉浸式全屏", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(17.dp))
                 }
             }
@@ -2641,6 +2832,8 @@ private fun DesktopImmersiveStage(
     onToggleShuffle: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onVolumeChange: (Float) -> Unit,
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: () -> Unit = {},
 ) {
     val isDarkScene = when (sceneStyle) {
         DesktopSceneStyle.VINYL_STUDY -> isDarkTheme
@@ -2679,41 +2872,70 @@ private fun DesktopImmersiveStage(
     val secondaryInk = if (isDarkScene) Color(0xFFB5ACA0) else MaterialTheme.colorScheme.onSurfaceVariant
     val activeAccent = if (isDarkScene) Color(0xFFE5C487) else accentColor
     var menuExpanded by remember { mutableStateOf(false) }
+    var lastPointerMoveMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var controlsVisible by remember { mutableStateOf(true) }
+
+    LaunchedEffect(lastPointerMoveMs, menuExpanded) {
+        controlsVisible = true
+        if (!menuExpanded) {
+            delay(3200)
+            controlsVisible = false
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(bgBrush)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        if (ev.type == PointerEventType.Move || ev.type == PointerEventType.Press) {
+                            lastPointerMoveMs = System.currentTimeMillis()
+                        }
+                    }
+                }
+            }
             .padding(
                 horizontal = if (sceneStyle == DesktopSceneStyle.POSTER_WALL) 16.dp else 40.dp,
                 vertical = 18.dp,
             ),
     ) {
-        // Sleek Minimal Top Bar: Left '<' Back + Right Frosted Pill (Scene Name + 2x2 Menu)
+        // Auto-hiding Minimal Top Bar (fades out after 3s idle for 100% pure art; glides back on mouse move)
+        Box(modifier = Modifier.fillMaxWidth().height(42.dp)) {
+        AnimatedVisibility(
+            visible = controlsVisible || menuExpanded,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(420)),
+            modifier = Modifier.fillMaxSize(),
+        ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onClose) {
+            IconButton(onClick = onClose, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回曲库", tint = primaryInk)
             }
 
-            Box {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.045f))
-                        .border(0.7.dp, primaryInk.copy(alpha = 0.14f), RoundedCornerShape(12.dp))
-                        .clickable { menuExpanded = true }
-                        .padding(horizontal = 14.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(sceneStyle.label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = primaryInk)
-                    Icon(Icons.Rounded.MoreHoriz, contentDescription = "切换场景与频谱", tint = primaryInk, modifier = Modifier.size(16.dp))
-                }
-                DesktopImmersiveControlMenu(
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.045f))
+                            .border(0.7.dp, primaryInk.copy(alpha = 0.14f), RoundedCornerShape(12.dp))
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { menuExpanded = true }
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(sceneStyle.label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = primaryInk)
+                        Icon(Icons.Rounded.MoreHoriz, contentDescription = "切换场景与频谱", tint = primaryInk, modifier = Modifier.size(16.dp))
+                    }
+                    DesktopImmersiveControlMenu(
                     expanded = menuExpanded,
                     isDarkSurface = isDarkScene,
                     currentScene = sceneStyle,
@@ -2726,7 +2948,27 @@ private fun DesktopImmersiveStage(
                     onAdjustLyricOffset = onAdjustLyricOffset,
                     onResetLyricOffset = onResetLyricOffset,
                 )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.045f))
+                        .border(0.7.dp, primaryInk.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = onToggleFullscreen),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                        contentDescription = "F11 真全屏",
+                        tint = primaryInk,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
+        }
+        }
         }
 
         // Main Widescreen Stage (5 Flagship Scenes)
@@ -2739,23 +2981,28 @@ private fun DesktopImmersiveStage(
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) { targetScene ->
             when (targetScene) {
-                // 1. 动感黑胶书房 (Reference #1: Left Square Sleeve + 35% Peeking Vinyl, Right Oversized 44sp Editorial Lyrics)
+                // 1. 动感黑胶书房 (Strict 16:9 proportional scale matching image_7d991e.jpg Top-Left!)
                 DesktopSceneStyle.VINYL_STUDY -> {
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                        val sleeveSize = min(maxHeight * 0.62f, maxWidth * 0.29f).coerceIn(220.dp, 340.dp)
-                        val discSize = sleeveSize * 0.92f
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        val stageMaxW = (maxHeight * 1.82f).coerceAtMost(maxWidth)
+                        val sleeveSize = min(maxHeight * 0.66f, stageMaxW * 0.33f).coerceIn(220.dp, 540.dp)
+                        val discSize = sleeveSize * 0.90f
+                        val lyricSp = (maxHeight.value * 0.068f).coerceIn(34f, 62f)
                         Row(
-                            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
+                            modifier = Modifier
+                                .width(stageMaxW)
+                                .fillMaxHeight()
+                                .padding(horizontal = (stageMaxW * 0.04f).coerceIn(16.dp, 56.dp)),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(64.dp),
+                            horizontalArrangement = Arrangement.spacedBy((stageMaxW * 0.055f).coerceIn(32.dp, 76.dp)),
                         ) {
                             Column(
-                                modifier = Modifier.width(sleeveSize + discSize * 0.36f),
+                                modifier = Modifier.width(sleeveSize + discSize * 0.35f),
                                 horizontalAlignment = Alignment.Start,
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .width(sleeveSize + discSize * 0.36f)
+                                        .width(sleeveSize + discSize * 0.35f)
                                         .height(sleeveSize)
                                         .clickable(onClick = onTogglePlayPause),
                                     contentAlignment = Alignment.CenterStart,
@@ -2766,21 +3013,29 @@ private fun DesktopImmersiveStage(
                                         discSize = discSize,
                                         modifier = Modifier.align(Alignment.CenterEnd),
                                     )
-                                    DesktopAlbumCover(
-                                        filePath = song.filePath,
+                                    // Archival matte cream physical sleeve frame with recessed artwork
+                                    Box(
                                         modifier = Modifier
                                             .align(Alignment.CenterStart)
                                             .size(sleeveSize)
-                                            .shadow(22.dp, RoundedCornerShape(4.dp)),
-                                        cornerRadius = 4.dp,
-                                        iconSize = 54.dp,
-                                    )
+                                            .shadow(24.dp, RoundedCornerShape(4.dp))
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(if (isDarkScene) Color(0xFF1E1D1B) else Color(0xFFF6F2E9))
+                                            .border(0.75.dp, primaryInk.copy(alpha = 0.12f), RoundedCornerShape(4.dp)),
+                                    ) {
+                                        DesktopAlbumCover(
+                                            filePath = song.filePath,
+                                            modifier = Modifier.fillMaxSize(),
+                                            cornerRadius = 4.dp,
+                                            iconSize = 54.dp,
+                                        )
+                                    }
                                 }
-                                Spacer(modifier = Modifier.height(20.dp))
+                                Spacer(modifier = Modifier.height(16.dp))
                                 Text(song.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Spacer(modifier = Modifier.height(3.dp))
+                                Spacer(modifier = Modifier.height(2.dp))
                                 Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = secondaryInk, maxLines = 1)
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
                                 DesktopAudioSpecStamp(song = song, isDarkSurface = isDarkScene, accentColor = activeAccent)
                             }
 
@@ -2794,24 +3049,30 @@ private fun DesktopImmersiveStage(
                                 horizontalAlignment = Alignment.Start,
                                 textAlign = TextAlign.Start,
                                 highlightAccent = true,
-                                maxActiveSp = 46f,
+                                maxActiveSp = lyricSp,
                                 modifier = Modifier.weight(1f),
                             )
                         }
                     }
                 }
 
-                // 2. 黑胶光场 (Reference #2: Giant 68%-Height Spinning Vinyl + Long Tonearm + Oversized Lyrics + Ivory Play Circle)
+                // 2. 黑胶光场 (Strict 16:9 proportional scale matching image_7d991e.jpg Top-Right!)
                 DesktopSceneStyle.VINYL_LIGHTFIELD -> {
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                        val giantDisc = min(maxHeight * 0.74f, maxWidth * 0.42f).coerceIn(280.dp, 460.dp)
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        val stageMaxW = (maxHeight * 1.82f).coerceAtMost(maxWidth)
+                        val giantDisc = min(maxHeight * 0.80f, stageMaxW * 0.45f).coerceIn(280.dp, 680.dp)
+                        val lyricSp = (maxHeight.value * 0.056f).coerceIn(28f, 54f)
+                        val playBtnSize = (giantDisc * 0.145f).coerceIn(54.dp, 78.dp)
                         Row(
-                            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+                            modifier = Modifier
+                                .width(stageMaxW)
+                                .fillMaxHeight()
+                                .padding(horizontal = (stageMaxW * 0.03f).coerceIn(14.dp, 44.dp)),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(56.dp),
+                            horizontalArrangement = Arrangement.spacedBy((stageMaxW * 0.045f).coerceIn(28.dp, 68.dp)),
                         ) {
                             Box(
-                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                                modifier = Modifier.weight(1.12f).fillMaxHeight(),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
@@ -2823,23 +3084,23 @@ private fun DesktopImmersiveStage(
                                     )
                                     DesktopTonearm(
                                         isPlaying = playerState.isPlaying,
-                                        length = giantDisc * 0.68f,
-                                        modifier = Modifier.align(Alignment.TopEnd).offset(x = giantDisc * 0.14f, y = (-8).dp),
+                                        length = giantDisc * 0.72f,
+                                        modifier = Modifier.align(Alignment.TopEnd).offset(x = giantDisc * 0.15f, y = (-6).dp),
                                     )
                                 }
                             }
 
                             Column(
-                                modifier = Modifier.weight(1.05f),
-                                horizontalAlignment = Alignment.Start,
+                                modifier = Modifier.weight(0.95f),
+                                horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center,
                             ) {
-                                Text(song.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(song.artist, style = MaterialTheme.typography.bodyLarge, color = secondaryInk, maxLines = 1)
+                                Text(song.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = primaryInk, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = secondaryInk, textAlign = TextAlign.Center, maxLines = 1)
                                 Spacer(modifier = Modifier.height(10.dp))
                                 DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent)
-                                Spacer(modifier = Modifier.height(28.dp))
+                                Spacer(modifier = Modifier.height(26.dp))
                                 DesktopEditorialLyrics(
                                     lyrics = lyrics,
                                     activeIdx = activeLyricIdx,
@@ -2847,22 +3108,21 @@ private fun DesktopImmersiveStage(
                                     accentColor = activeAccent,
                                     secondaryColor = secondaryInk,
                                     mutedColor = secondaryInk,
-                                    horizontalAlignment = Alignment.Start,
-                                    textAlign = TextAlign.Start,
-                                    maxActiveSp = 40f,
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    textAlign = TextAlign.Center,
+                                    maxActiveSp = lyricSp,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
-                                Spacer(modifier = Modifier.height(30.dp))
+                                Spacer(modifier = Modifier.height(28.dp))
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                                 ) {
-                                    IconButton(onClick = onSkipPrevious) { Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", tint = primaryInk, modifier = Modifier.size(26.dp)) }
+                                    IconButton(onClick = onSkipPrevious) { Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", tint = primaryInk, modifier = Modifier.size(28.dp)) }
                                     Box(
                                         modifier = Modifier
-                                            .size(58.dp)
-                                            .shadow(12.dp, CircleShape)
+                                            .size(playBtnSize)
+                                            .shadow(14.dp, CircleShape)
                                             .clip(CircleShape)
                                             .background(Color(0xFFF3EFE6))
                                             .clickable(onClick = onTogglePlayPause),
@@ -2872,10 +3132,10 @@ private fun DesktopImmersiveStage(
                                             imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                             contentDescription = "播放/暂停",
                                             tint = Color(0xFF1D1A17),
-                                            modifier = Modifier.size(30.dp),
+                                            modifier = Modifier.size(playBtnSize * 0.50f),
                                         )
                                     }
-                                    IconButton(onClick = onSkipNext) { Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", tint = primaryInk, modifier = Modifier.size(26.dp)) }
+                                    IconButton(onClick = onSkipNext) { Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", tint = primaryInk, modifier = Modifier.size(28.dp)) }
                                 }
                             }
                         }
@@ -2914,58 +3174,65 @@ private fun DesktopImmersiveStage(
                                 center = Offset(size.width * 0.84f, size.height * 0.20f),
                             )
                         }
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(36.dp),
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        val stageW = (maxHeight * 1.85f).coerceAtMost(maxWidth)
+                        val coverSz = (maxHeight * 0.36f).coerceIn(190.dp, 320.dp)
+                        val deckH = (maxHeight * 0.38f).coerceIn(228.dp, 310.dp)
+                        val lyricSp = (maxHeight.value * 0.048f).coerceIn(28f, 44f)
+                        Column(
+                            modifier = Modifier.width(stageW).fillMaxHeight(),
+                            verticalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            DesktopAlbumCover(
-                                filePath = song.filePath,
+                            Row(
                                 modifier = Modifier
-                                    .size(210.dp)
-                                    .shadow(20.dp, RoundedCornerShape(4.dp))
-                                    .clickable(onClick = onTogglePlayPause),
-                                cornerRadius = 4.dp,
-                                iconSize = 48.dp,
-                            )
-                            Column(modifier = Modifier.width(200.dp)) {
-                                Text(song.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFFF6F1E6), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFC4BBB0), maxLines = 1)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = Color(0xFFE5C487))
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(36.dp),
+                            ) {
+                                DesktopAlbumCover(
+                                    filePath = song.filePath,
+                                    modifier = Modifier
+                                        .size(coverSz)
+                                        .shadow(22.dp, RoundedCornerShape(4.dp))
+                                        .clickable(onClick = onTogglePlayPause),
+                                    cornerRadius = 4.dp,
+                                    iconSize = 54.dp,
+                                )
+                                Column(modifier = Modifier.width(220.dp)) {
+                                    Text(song.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color(0xFFF6F1E6), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(song.artist, style = MaterialTheme.typography.bodyLarge, color = Color(0xFFC4BBB0), maxLines = 1)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = Color(0xFFE5C487))
+                                }
+                                DesktopEditorialLyrics(
+                                    lyrics = lyrics,
+                                    activeIdx = activeLyricIdx,
+                                    activeColor = Color(0xFFF6F1E6),
+                                    accentColor = Color(0xFFE5C487),
+                                    secondaryColor = Color(0xFFC8BFB4),
+                                    mutedColor = Color(0xFFA69D92),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    textAlign = TextAlign.Center,
+                                    maxActiveSp = lyricSp,
+                                    modifier = Modifier.weight(1f),
+                                )
                             }
-                            DesktopEditorialLyrics(
-                                lyrics = lyrics,
-                                activeIdx = activeLyricIdx,
-                                activeColor = Color(0xFFF6F1E6),
-                                accentColor = Color(0xFFE5C487),
-                                secondaryColor = Color(0xFFC8BFB4),
-                                mutedColor = Color(0xFFA69D92),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                textAlign = TextAlign.Center,
-                                maxActiveSp = 34f,
-                                modifier = Modifier.weight(1f),
+
+                            DesktopVintageReceiverDeck(
+                                playerState = playerState,
+                                onTogglePlayPause = onTogglePlayPause,
+                                onSkipPrevious = onSkipPrevious,
+                                onSkipNext = onSkipNext,
+                                onCycleRepeat = onCycleRepeat,
+                                onToggleShuffle = onToggleShuffle,
+                                onSeekTo = onSeekTo,
+                                onVolumeChange = onVolumeChange,
+                                deckHeight = deckH,
                             )
                         }
-
-                        DesktopVintageReceiverDeck(
-                            playerState = playerState,
-                            onTogglePlayPause = onTogglePlayPause,
-                            onSkipPrevious = onSkipPrevious,
-                            onSkipNext = onSkipNext,
-                            onCycleRepeat = onCycleRepeat,
-                            onToggleShuffle = onToggleShuffle,
-                            onSeekTo = onSeekTo,
-                            onVolumeChange = onVolumeChange,
-                        )
                     }
                     }
                 }
@@ -2991,13 +3258,18 @@ private fun DesktopImmersiveStage(
                         Spacer(modifier = Modifier.height(6.dp))
                         DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent)
                         Spacer(modifier = Modifier.height(10.dp))
-                        DesktopThreeSlotLyrics(
+                        DesktopEditorialLyrics(
                             lyrics = lyrics,
                             activeIdx = activeLyricIdx,
                             activeColor = primaryInk,
+                            accentColor = activeAccent,
                             secondaryColor = secondaryInk,
-                            mutedColor = secondaryInk.copy(alpha = 0.65f),
-                            modifier = Modifier.fillMaxWidth(0.75f),
+                            mutedColor = secondaryInk.copy(alpha = 0.68f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            textAlign = TextAlign.Center,
+                            useEditorialSerif = true,
+                            maxActiveSp = 30f,
+                            modifier = Modifier.fillMaxWidth(0.72f),
                         )
                     }
                 }

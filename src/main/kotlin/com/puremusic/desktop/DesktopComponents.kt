@@ -34,6 +34,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import java.io.File
+import androidx.compose.ui.text.platform.Font
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.composed
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -527,7 +542,7 @@ fun DesktopSpatialRecordGallery(
             },
         contentAlignment = Alignment.Center,
     ) {
-        val frontSize = min(maxWidth * 0.38f, maxHeight * 0.68f).coerceIn(220.dp, 350.dp)
+        val frontSize = min(maxWidth * 0.36f, maxHeight * 0.66f).coerceIn(220.dp, 540.dp)
         val corridorW = frontSize * 1.72f
         val corridorH = frontSize * 1.38f
         val baseY = 56.dp
@@ -810,7 +825,7 @@ fun DesktopEditorialLyrics(
             else -> (maxActiveSp * 0.56f).coerceAtLeast(21f)
         }
     }
-    val family = if (useEditorialSerif) FontFamily.Serif else FontFamily.SansSerif
+    val family = if (useEditorialSerif) DesktopTypographyFamilies.editorialSerif else DesktopTypographyFamilies.uiSans
 
     Column(modifier = modifier, horizontalAlignment = horizontalAlignment, verticalArrangement = Arrangement.Center) {
         if (lyrics.isEmpty()) {
@@ -861,7 +876,9 @@ fun DesktopPosterWallStage(
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize().clip(RectangleShape)) {
-        val discSize = min(maxHeight * 0.64f, maxWidth * 0.34f).coerceIn(240.dp, 380.dp)
+        val discSize = min(maxHeight * 0.78f, maxWidth * 0.44f).coerceIn(240.dp, 680.dp)
+        val lyricSp = (maxHeight.value * 0.044f).coerceIn(20f, 38f)
+        val titleSp = (maxHeight.value * 0.030f).coerceIn(14f, 24f)
         // Compute strict 1:1 square tile grid so album covers NEVER stretch or squash!
         val rows = 4
         val gap = 8.dp
@@ -912,10 +929,10 @@ fun DesktopPosterWallStage(
                 ),
         )
 
-        Column(
-            modifier = Modifier.fillMaxSize().padding(bottom = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+        // Monumental centered spinning vinyl with crisp center-overlaid title & lyric (matches image_7d991e.jpg!)
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
         ) {
             DesktopSpinningVinylDisc(
                 filePath = currentSong.filePath,
@@ -923,23 +940,33 @@ fun DesktopPosterWallStage(
                 discSize = discSize,
                 modifier = Modifier.clickable(onClick = onTogglePlayPause),
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(currentSong.title, fontSize = 25.sp, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, color = Color(0xFFF6F2EA), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(currentSong.artist, fontSize = 14.sp, color = Color(0xFFBDB6AC), maxLines = 1)
-            if (activeText.isNotBlank()) {
-                Spacer(modifier = Modifier.height(12.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.72f)
+                    .background(Color.Black.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 24.dp, vertical = 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 Text(
-                    text = activeText,
-                    fontSize = 24.sp,
-                    fontFamily = FontFamily.Serif,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFFFAF6EE),
-                    textAlign = TextAlign.Center,
+                    text = "${currentSong.title} · ${currentSong.artist}",
+                    fontSize = titleSp.sp,
+                    color = Color(0xFFE5DFD5),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(0.76f),
                 )
+                if (activeText.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = activeText,
+                        fontSize = lyricSp.sp,
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFAF6EE),
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -962,6 +989,7 @@ fun DesktopVintageReceiverDeck(
     onToggleShuffle: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onVolumeChange: (Float) -> Unit,
+    deckHeight: Dp = 236.dp,
     modifier: Modifier = Modifier,
 ) {
     var vuL by remember { mutableFloatStateOf(0f) }
@@ -982,7 +1010,7 @@ fun DesktopVintageReceiverDeck(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(228.dp)
+                .height(deckHeight)
                 .shadow(28.dp, RoundedCornerShape(6.dp), ambientColor = Color.Black, spotColor = Color.Black)
                 .clip(RoundedCornerShape(6.dp))
                 .background(
@@ -1638,4 +1666,114 @@ fun DesktopSplashOverlay(visible: Boolean, darkMode: Boolean) {
             }
         }
     }
+}
+
+
+/**
+ * Crisp Windows Native Typography Loader:
+ * Loads Microsoft YaHei UI (msyh.ttc / msyhbd.ttc) for razor-sharp UI body & CJK text,
+ * and Georgia (georgia.ttf / georgiab.ttf) for editorial serif lyrics, with clean cross-OS fallback.
+ */
+object DesktopTypographyFamilies {
+    val uiSans: FontFamily by lazy {
+        runCatching {
+            val regular = File("C:/Windows/Fonts/msyh.ttc")
+            val bold = File("C:/Windows/Fonts/msyhbd.ttc")
+            val light = File("C:/Windows/Fonts/msyhl.ttc")
+            if (regular.exists()) {
+                val fonts = mutableListOf(Font(file = regular, weight = FontWeight.Normal, style = FontStyle.Normal))
+                if (bold.exists()) {
+                    fonts.add(Font(file = bold, weight = FontWeight.SemiBold, style = FontStyle.Normal))
+                    fonts.add(Font(file = bold, weight = FontWeight.Bold, style = FontStyle.Normal))
+                }
+                if (light.exists()) {
+                    fonts.add(Font(file = light, weight = FontWeight.Light, style = FontStyle.Normal))
+                }
+                FontFamily(fonts)
+            } else {
+                FontFamily.SansSerif
+            }
+        }.getOrDefault(FontFamily.SansSerif)
+    }
+
+    val editorialSerif: FontFamily by lazy {
+        runCatching {
+            val reg = File("C:/Windows/Fonts/georgia.ttf")
+            val bold = File("C:/Windows/Fonts/georgiab.ttf")
+            if (reg.exists()) {
+                val fonts = mutableListOf(Font(file = reg, weight = FontWeight.Normal, style = FontStyle.Normal))
+                if (bold.exists()) {
+                    fonts.add(Font(file = bold, weight = FontWeight.Bold, style = FontStyle.Normal))
+                    fonts.add(Font(file = bold, weight = FontWeight.SemiBold, style = FontStyle.Normal))
+                }
+                FontFamily(fonts)
+            } else {
+                FontFamily.Serif
+            }
+        }.getOrDefault(FontFamily.Serif)
+    }
+}
+
+/**
+ * Native desktop interactive hover modifier: hand pointer cursor + subtle paper hover highlight + click.
+ */
+fun Modifier.desktopHoverClickable(
+    enabled: Boolean = true,
+    shape: Shape = RoundedCornerShape(10.dp),
+    hoverAlpha: Float = 0.055f,
+    onClick: () -> Unit,
+): Modifier = composed {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val hoverBg = if (enabled && isHovered) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = hoverAlpha)
+    } else {
+        Color.Transparent
+    }
+    this
+        .clip(shape)
+        .background(hoverBg)
+        .hoverable(interactionSource = interactionSource, enabled = enabled)
+        .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+        .clickable(enabled = enabled, onClick = onClick)
+}
+
+@Composable
+fun DesktopThinScrollbar(
+    listState: LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    VerticalScrollbar(
+        adapter = rememberScrollbarAdapter(listState),
+        modifier = modifier.fillMaxHeight().padding(vertical = 4.dp, horizontal = 2.dp),
+        style = ScrollbarStyle(
+            minimalHeight = 28.dp,
+            thickness = 4.dp,
+            shape = CircleShape,
+            hoverDurationMillis = 220,
+            unhoverColor = ink.copy(alpha = 0.14f),
+            hoverColor = ink.copy(alpha = 0.38f),
+        ),
+    )
+}
+
+@Composable
+fun DesktopThinGridScrollbar(
+    gridState: LazyGridState,
+    modifier: Modifier = Modifier,
+) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    VerticalScrollbar(
+        adapter = rememberScrollbarAdapter(gridState),
+        modifier = modifier.fillMaxHeight().padding(vertical = 4.dp, horizontal = 2.dp),
+        style = ScrollbarStyle(
+            minimalHeight = 28.dp,
+            thickness = 4.dp,
+            shape = CircleShape,
+            hoverDurationMillis = 220,
+            unhoverColor = ink.copy(alpha = 0.14f),
+            hoverColor = ink.copy(alpha = 0.38f),
+        ),
+    )
 }

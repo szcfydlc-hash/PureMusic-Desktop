@@ -162,6 +162,12 @@ data class DesktopConfig(
     val eqEnabled: Boolean = false,
     val eqBandsDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f),
     val lyricOffsetsMs: Map<String, Long> = emptyMap(),
+    val volume: Float = 0.85f,
+    val repeatMode: RepeatMode = RepeatMode.ALL,
+    val shuffleEnabled: Boolean = false,
+    val lastSongPath: String? = null,
+    val windowWidthDp: Int = 1240,
+    val windowHeightDp: Int = 800,
 )
 
 fun formatDuration(ms: Long): String {

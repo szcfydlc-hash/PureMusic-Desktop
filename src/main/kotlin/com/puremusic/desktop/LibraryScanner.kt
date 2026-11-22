@@ -200,6 +200,12 @@ object DesktopConfigStore {
         var eqEnabled = false
         var eqBands = listOf(0f, 0f, 0f, 0f, 0f)
         val lyricOffsets = mutableMapOf<String, Long>()
+        var volume = 0.85f
+        var repeatMode = RepeatMode.ALL
+        var shuffleEnabled = false
+        var lastSongPath: String? = null
+        var windowWidthDp = 1240
+        var windowHeightDp = 800
 
         runCatching {
             f.readLines(StandardCharsets.UTF_8).forEach { line ->
@@ -218,6 +224,12 @@ object DesktopConfigStore {
                     "favorites" -> favs = v.split('|').filter { it.isNotBlank() }.toSet()
                     "recents" -> recents = v.split('|').filter { it.isNotBlank() }
                     "eqEnabled" -> eqEnabled = v.toBoolean()
+                    "volume" -> volume = (v.toFloatOrNull() ?: 0.85f).coerceIn(0f, 1f)
+                    "repeatMode" -> repeatMode = RepeatMode.entries.firstOrNull { it.name == v } ?: RepeatMode.ALL
+                    "shuffleEnabled" -> shuffleEnabled = v.toBoolean()
+                    "lastSongPath" -> lastSongPath = v.takeIf { it.isNotBlank() }
+                    "windowWidthDp" -> windowWidthDp = (v.toIntOrNull() ?: 1240).coerceIn(900, 3840)
+                    "windowHeightDp" -> windowHeightDp = (v.toIntOrNull() ?: 800).coerceIn(600, 2160)
                     "eqBands" -> {
                         val parsed = v.split(',').mapNotNull { it.toFloatOrNull() }
                         if (parsed.size == 5) eqBands = parsed
@@ -274,6 +286,12 @@ object DesktopConfigStore {
             eqEnabled = eqEnabled,
             eqBandsDb = eqBands,
             lyricOffsetsMs = lyricOffsets,
+            volume = volume,
+            repeatMode = repeatMode,
+            shuffleEnabled = shuffleEnabled,
+            lastSongPath = lastSongPath,
+            windowWidthDp = windowWidthDp,
+            windowHeightDp = windowHeightDp,
         )
     }
 
@@ -290,6 +308,12 @@ object DesktopConfigStore {
             sb.appendLine("favorites=${cfg.favoritePaths.joinToString("|")}")
             sb.appendLine("recents=${cfg.recentPaths.take(50).joinToString("|")}")
             sb.appendLine("eqEnabled=${cfg.eqEnabled}")
+            sb.appendLine("volume=${cfg.volume}")
+            sb.appendLine("repeatMode=${cfg.repeatMode.name}")
+            sb.appendLine("shuffleEnabled=${cfg.shuffleEnabled}")
+            sb.appendLine("lastSongPath=${cfg.lastSongPath.orEmpty()}")
+            sb.appendLine("windowWidthDp=${cfg.windowWidthDp}")
+            sb.appendLine("windowHeightDp=${cfg.windowHeightDp}")
             sb.appendLine("eqBands=${cfg.eqBandsDb.joinToString(",")}")
             val hourlyStr = cfg.hourlyPlays.entries.joinToString(",") { "${it.key}:${it.value}" }
             sb.appendLine("hourly=$hourlyStr")
