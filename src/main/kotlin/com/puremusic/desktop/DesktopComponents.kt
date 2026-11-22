@@ -33,6 +33,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.HorizontalDivider
@@ -1262,5 +1268,487 @@ fun DesktopSplashOverlay(
                 Text("PURE MUSIC · HI-RES AUDIO", fontSize = 10.sp, color = muted, letterSpacing = 2.4.sp)
             }
         }
+    }
+}
+
+
+/**
+ * Oversized Widescreen Magazine Editorial Lyrics (36–46sp bold active line, matching reference proportions).
+ */
+@Composable
+fun DesktopEditorialLyrics(
+    lyrics: List<LyricLine>,
+    activeIdx: Int,
+    activeColor: Color,
+    accentColor: Color,
+    secondaryColor: Color,
+    mutedColor: Color,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start,
+    textAlign: TextAlign = TextAlign.Start,
+    highlightAccent: Boolean = false,
+    maxActiveSp: Float = 44f,
+    modifier: Modifier = Modifier,
+) {
+    val activeLine = if (activeIdx in lyrics.indices) lyrics[activeIdx] else null
+    val prevLine = if (activeIdx > 0 && activeIdx - 1 in lyrics.indices) lyrics[activeIdx - 1] else null
+    val nextLine = if (activeIdx >= 0 && activeIdx + 1 in lyrics.indices) lyrics[activeIdx + 1] else null
+
+    val (activePrimary, activeSecondary) = remember(activeLine) {
+        if (activeLine == null) "" to null else splitBilingualLyric(activeLine.primaryText, activeLine.secondaryText)
+    }
+    val prevText = remember(prevLine) {
+        if (prevLine == null) "" else splitBilingualLyric(prevLine.primaryText, prevLine.secondaryText).first
+    }
+    val subText = remember(activeSecondary, nextLine) {
+        when {
+            !activeSecondary.isNullOrBlank() -> activeSecondary
+            nextLine != null -> splitBilingualLyric(nextLine.primaryText, nextLine.secondaryText).first
+            else -> ""
+        }
+    }
+
+    val dynamicSp = remember(activePrimary, maxActiveSp) {
+        when {
+            activePrimary.length <= 16 -> maxActiveSp
+            activePrimary.length <= 28 -> (maxActiveSp * 0.84f).coerceAtLeast(28f)
+            activePrimary.length <= 44 -> (maxActiveSp * 0.68f).coerceAtLeast(24f)
+            else -> (maxActiveSp * 0.56f).coerceAtLeast(20f)
+        }
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = horizontalAlignment,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        if (lyrics.isEmpty()) {
+            Text(
+                text = "纯粹聆听 · 静享此刻",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                color = mutedColor,
+                textAlign = textAlign,
+            )
+            return@Column
+        }
+
+        if (prevText.isNotBlank()) {
+            Text(
+                text = prevText,
+                fontSize = 15.sp,
+                color = mutedColor.copy(alpha = 0.75f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = textAlign,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+        }
+
+        Text(
+            text = activePrimary,
+            fontSize = dynamicSp.sp,
+            lineHeight = (dynamicSp * 1.24f).sp,
+            fontWeight = FontWeight.Bold,
+            color = if (highlightAccent) accentColor else activeColor,
+            textAlign = textAlign,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        if (subText.isNotBlank()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = subText,
+                fontSize = 18.sp,
+                lineHeight = 26.sp,
+                color = secondaryColor.copy(alpha = 0.88f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = textAlign,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/**
+ * Full-bleed Clickable Local Album Poster Wall + Giant Centered Spinning Vinyl LP (matching reference #3).
+ */
+@Composable
+fun DesktopPosterWallStage(
+    currentSong: DesktopSong,
+    allSongs: List<DesktopSong>,
+    vinylRotation: Float,
+    lyrics: List<LyricLine>,
+    activeLyricIdx: Int,
+    accentColor: Color,
+    onSelectSong: (DesktopSong) -> Unit,
+    onTogglePlayPause: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val wallSongs = remember(allSongs, currentSong.id) {
+        val uniqueAlbums = allSongs.distinctBy { it.album }.ifEmpty { listOf(currentSong) }
+        List(32) { idx -> uniqueAlbums[idx % uniqueAlbums.size] }
+    }
+    val activeLine = if (activeLyricIdx in lyrics.indices) lyrics[activeLyricIdx] else null
+    val activeText = remember(activeLine) {
+        if (activeLine == null) "" else splitBilingualLyric(activeLine.primaryText, activeLine.secondaryText).first
+    }
+
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val discSize = min(maxHeight * 0.62f, maxWidth * 0.34f).coerceIn(220.dp, 360.dp)
+
+        // 8x4 Full-bleed clickable album cover mosaic backdrop
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            wallSongs.chunked(8).forEach { rowSongs ->
+                Row(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    rowSongs.forEach { tileSong ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onSelectSong(tileSong) },
+                        ) {
+                            DesktopAlbumCover(
+                                filePath = tileSong.filePath,
+                                modifier = Modifier.fillMaxSize(),
+                                cornerRadius = 6.dp,
+                                iconSize = 24.dp,
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = if (tileSong.id == currentSong.id) 0.18f else 0.48f)),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Dramatic radial & bottom dark vignette so vinyl & lyrics pop cleanly
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color.Black.copy(alpha = 0.25f),
+                        0.45f to Color.Black.copy(alpha = 0.20f),
+                        0.76f to Color.Black.copy(alpha = 0.72f),
+                        1.0f to Color.Black.copy(alpha = 0.92f),
+                    ),
+                ),
+        )
+
+        // Giant Centered Spinning Vinyl LP + Song Info + Bold Single-Line Lyric
+        Column(
+            modifier = Modifier.fillMaxSize().padding(bottom = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            DesktopSpinningVinylDisc(
+                filePath = currentSong.filePath,
+                rotationDegrees = vinylRotation,
+                discSize = discSize,
+                modifier = Modifier.clickable(onClick = onTogglePlayPause),
+            )
+            Spacer(modifier = Modifier.height(18.dp))
+            Text(
+                text = currentSong.title,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFF6F2EA),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = currentSong.artist,
+                fontSize = 14.sp,
+                color = Color(0xFFBDB6AC),
+                maxLines = 1,
+            )
+            if (activeText.isNotBlank()) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                    text = activeText,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFFFAF6EE),
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(0.76f),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Vintage Hi-Fi Walnut-Framed Brushed-Aluminum Stereo Receiver Deck (matching reference #4).
+ * Features REAL 60fps stereo L/R analog VU meters driven by DesktopSpectrumBus.stereoVu,
+ * machined brushed-metal buttons, physical repeat/shuffle keys, and draggable rotary volume knob.
+ */
+@Composable
+fun DesktopVintageReceiverDeck(
+    playerState: DesktopPlayerState,
+    onTogglePlayPause: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+    onCycleRepeat: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onVolumeChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var vuL by remember { mutableFloatStateOf(0f) }
+    var vuR by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(playerState.isPlaying) {
+        while (true) {
+            withFrameNanos {
+                val (targetL, targetR) = if (playerState.isPlaying) DesktopSpectrumBus.stereoVu.value else (0f to 0f)
+                vuL += (targetL - vuL) * 0.24f
+                vuR += (targetR - vuR) * 0.24f
+            }
+        }
+    }
+
+    // Outer Walnut Wood Cabinet Frame
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(214.dp)
+            .shadow(24.dp, RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                Brush.verticalGradient(
+                    0.0f to Color(0xFF6B3E22),
+                    0.14f to Color(0xFF4A2814),
+                    0.86f to Color(0xFF3A1E0E),
+                    1.0f to Color(0xFF241106),
+                ),
+            )
+            .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Top thin warm-gold seek strip embedded into walnut bevel
+            val prog = if (playerState.durationMs > 0L) (playerState.positionMs.toFloat() / playerState.durationMs).coerceIn(0f, 1f) else 0f
+            var barW by remember { mutableFloatStateOf(1f) }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(formatDuration(playerState.positionMs), fontSize = 10.sp, color = Color(0xFFE0CCA8))
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(12.dp)
+                        .onSizeChanged { barW = it.width.toFloat().coerceAtLeast(1f) }
+                        .pointerInput(playerState.durationMs) {
+                            detectTapGestures { off ->
+                                onSeekTo(((off.x / barW).coerceIn(0f, 1f) * playerState.durationMs).toLong())
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth().height(2.5.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f))) {
+                        Box(modifier = Modifier.fillMaxWidth(prog).fillMaxHeight().background(Color(0xFFE5C487)))
+                    }
+                }
+                Text(formatDuration(playerState.durationMs), fontSize = 10.sp, color = Color(0xFFE0CCA8))
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Brushed-Aluminum Faceplate
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            0.0f to Color(0xFFCFC8BC),
+                            0.45f to Color(0xFFB5AEA2),
+                            1.0f to Color(0xFF9C9589),
+                        ),
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 24.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                // Left: Brand Engraving + Dual Glowing Warm-Amber Analog VU Meters
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Column {
+                        Text("立体声接收机", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF3E3933))
+                        Text("PURE MUSIC HI-FI", fontSize = 9.sp, color = Color(0xFF5D574F), letterSpacing = 1.sp)
+                    }
+                    VintageVuMeterBox(label = "左声道 L", level = vuL)
+                    VintageVuMeterBox(label = "右声道 R", level = vuR)
+                }
+
+                // Center: Machined Brushed-Metal Transport Buttons + Mode Keys
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                        VintageMetalButton(size = 44.dp, onClick = onSkipPrevious) {
+                            Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", tint = Color(0xFF282522), modifier = Modifier.size(20.dp))
+                        }
+                        VintageMetalButton(size = 58.dp, onClick = onTogglePlayPause) {
+                            Icon(
+                                imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = "播放/暂停",
+                                tint = Color(0xFF1F1C19),
+                                modifier = Modifier.size(28.dp),
+                            )
+                        }
+                        VintageMetalButton(size = 44.dp, onClick = onSkipNext) {
+                            Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", tint = Color(0xFF282522), modifier = Modifier.size(20.dp))
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(
+                            Triple("列表循环", playerState.repeatMode == RepeatMode.ALL && !playerState.shuffleEnabled, onCycleRepeat),
+                            Triple("单曲循环", playerState.repeatMode == RepeatMode.ONE && !playerState.shuffleEnabled, onCycleRepeat),
+                            Triple("随机播放", playerState.shuffleEnabled, onToggleShuffle),
+                        ).forEach { (lbl, active, action) ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (active) Color(0xFFD9AE64) else Color(0xFFABA397))
+                                    .border(0.8.dp, Color(0xFF544E46), RoundedCornerShape(4.dp))
+                                    .clickable(onClick = action)
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                            ) {
+                                Text(lbl, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF24201C))
+                            }
+                        }
+                    }
+                }
+
+                // Right: Tactile Draggable Rotary Volume Knob
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("音量 ${(playerState.volume * 100).toInt()}%", fontSize = 10.sp, fontWeight = FontWeight.Medium, color = Color(0xFF3A3530))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    val knobAngle = -135f + playerState.volume * 270f
+                    Box(
+                        modifier = Modifier
+                            .size(72.dp)
+                            .shadow(10.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.sweepGradient(
+                                    0.00f to Color(0xFFDAD3C7),
+                                    0.25f to Color(0xFF9C9589),
+                                    0.50f to Color(0xFFE2DCD1),
+                                    0.75f to Color(0xFF8C857A),
+                                    1.00f to Color(0xFFDAD3C7),
+                                ),
+                            )
+                            .border(2.dp, Color(0xFF47423B), CircleShape)
+                            .pointerInput(playerState.volume) {
+                                detectVerticalDragGestures { _, dragAmount ->
+                                    onVolumeChange((playerState.volume - dragAmount * 0.0045f).coerceIn(0f, 1f))
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Canvas(modifier = Modifier.fillMaxSize().graphicsLayer { rotationZ = knobAngle }) {
+                            drawLine(
+                                color = Color(0xFF2B2723),
+                                start = Offset(size.width / 2f, size.height * 0.14f),
+                                end = Offset(size.width / 2f, size.height * 0.34f),
+                                strokeWidth = 3.2f,
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VintageVuMeterBox(label: String, level: Float) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .width(126.dp)
+                .height(74.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color(0xFFE7A94B),
+                        0.55f to Color(0xFFF3C66F),
+                        1.0f to Color(0xFFD59034),
+                    ),
+                )
+                .border(2.dp, Color(0xFF29241E), RoundedCornerShape(4.dp)),
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val pivot = Offset(size.width * 0.5f, size.height * 1.18f)
+                val arcR = size.height * 0.88f
+                // Scale tick marks (-20dB to +3dB)
+                for (i in 0..10) {
+                    val deg = -132.0 + i * 8.4
+                    val rad = Math.toRadians(deg)
+                    val p1 = Offset(pivot.x + (cos(rad) * (arcR - 8f)).toFloat(), pivot.y + (sin(rad) * (arcR - 8f)).toFloat())
+                    val p2 = Offset(pivot.x + (cos(rad) * arcR).toFloat(), pivot.y + (sin(rad) * arcR).toFloat())
+                    drawLine(
+                        color = if (i >= 8) Color(0xFFB52B1E) else Color(0xFF3A2714),
+                        start = p1,
+                        end = p2,
+                        strokeWidth = if (i % 2 == 0) 2.2f else 1.3f,
+                    )
+                }
+                // Live swinging needle
+                val needleDeg = -132.0 + level.coerceIn(0f, 1f) * 84.0
+                val nRad = Math.toRadians(needleDeg)
+                val tip = Offset(pivot.x + (cos(nRad) * (arcR + 4f)).toFloat(), pivot.y + (sin(nRad) * (arcR + 4f)).toFloat())
+                drawLine(Color(0xFF21170E), pivot, tip, strokeWidth = 2.4f, cap = StrokeCap.Round)
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(label, fontSize = 10.sp, color = Color(0xFF3D3832))
+    }
+}
+
+@Composable
+private fun VintageMetalButton(
+    size: Dp,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .shadow(6.dp, CircleShape)
+            .clip(CircleShape)
+            .background(
+                Brush.linearGradient(
+                    0.0f to Color(0xFFE3DDD2),
+                    0.5f to Color(0xFFB5AEA2),
+                    1.0f to Color(0xFF8A8377),
+                ),
+            )
+            .border(1.2.dp, Color(0xFF4D473F), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
     }
 }

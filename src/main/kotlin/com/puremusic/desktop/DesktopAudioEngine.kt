@@ -33,6 +33,12 @@ object DesktopSpectrumBus {
     private val _beatEnergy = MutableStateFlow(0f)
     val beatEnergy: StateFlow<Float> = _beatEnergy.asStateFlow()
 
+    private val _stereoVu = MutableStateFlow(0f to 0f)
+    val stereoVu: StateFlow<Pair<Float, Float>> = _stereoVu.asStateFlow()
+
+    private var smoothVuL = 0f
+    private var smoothVuR = 0f
+
     private val smoothed = FloatArray(BAND_COUNT)
     private val real = DoubleArray(FFT_SIZE)
     private val imag = DoubleArray(FFT_SIZE)
@@ -52,6 +58,9 @@ object DesktopSpectrumBus {
         runningCeilDb = -14.0
         runningBassAvg = 0.08f
         smoothedBeat = 0f
+        smoothVuL = 0f
+        smoothVuR = 0f
+        _stereoVu.value = 0f to 0f
         _beatEnergy.value = 0f
         _bands.value = FloatArray(BAND_COUNT)
     }
@@ -66,24 +75,38 @@ object DesktopSpectrumBus {
         val totalFrames = length / frameBytes
         if (totalFrames < 32) return
 
-        // Fill 256-point Hann-windowed mono buffer
+        // Fill 256-point Hann-windowed mono buffer + real stereo L/R RMS for analog VU meters
         val step = (totalFrames.toDouble() / FFT_SIZE).coerceAtLeast(1.0)
+        var sumSqL = 0.0
+        var sumSqR = 0.0
         for (i in 0 until FFT_SIZE) {
             val frameIdx = (i * step).toInt().coerceAtMost(totalFrames - 1)
             val byteIdx = frameIdx * frameBytes
-            var sum = 0.0
-            for (c in 0 until ch) {
-                val off = byteIdx + c * 2
-                if (off + 1 < length) {
-                    val b0 = bytes[off].toInt() and 0xFF
-                    val b1 = bytes[off + 1].toInt()
-                    val s = ((b1 shl 8) or b0).toShort()
-                    sum += s / 32768.0
-                }
+            var sL = 0.0
+            var sR = 0.0
+            if (byteIdx + 1 < length) {
+                val b0 = bytes[byteIdx].toInt() and 0xFF
+                val b1 = bytes[byteIdx + 1].toInt()
+                sL = ((b1 shl 8) or b0).toShort() / 32768.0
+                sR = sL
             }
-            real[i] = (sum / ch) * hannWindow[i]
+            if (ch >= 2 && byteIdx + 3 < length) {
+                val b2 = bytes[byteIdx + 2].toInt() and 0xFF
+                val b3 = bytes[byteIdx + 3].toInt()
+                sR = ((b3 shl 8) or b2).toShort() / 32768.0
+            }
+            sumSqL += sL * sL
+            sumSqR += sR * sR
+            real[i] = ((sL + sR) * 0.5) * hannWindow[i]
             imag[i] = 0.0
         }
+        val rmsL = sqrt(sumSqL / FFT_SIZE).toFloat()
+        val rmsR = sqrt(sumSqR / FFT_SIZE).toFloat()
+        val vuTargetL = tanh((rmsL * 3.8).toDouble()).toFloat().coerceIn(0f, 1f)
+        val vuTargetR = tanh((rmsR * 3.8).toDouble()).toFloat().coerceIn(0f, 1f)
+        smoothVuL = if (vuTargetL > smoothVuL) smoothVuL + (vuTargetL - smoothVuL) * 0.45f else smoothVuL * 0.86f
+        smoothVuR = if (vuTargetR > smoothVuR) smoothVuR + (vuTargetR - smoothVuR) * 0.45f else smoothVuR * 0.86f
+        _stereoVu.value = smoothVuL to smoothVuR
 
         // In-place Radix-2 Cooley-Tukey FFT
         fftRadix2(real, imag)

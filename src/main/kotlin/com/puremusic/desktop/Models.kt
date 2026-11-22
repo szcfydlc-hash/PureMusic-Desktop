@@ -86,10 +86,11 @@ enum class SortOrder(val label: String) {
 }
 
 enum class DesktopSceneStyle(val label: String) {
-    VINYL_STUDY("黑胶书房"),
-    SPATIAL_GALLERY("空间唱片廊"),
+    VINYL_STUDY("动感黑胶书房"),
     VINYL_LIGHTFIELD("黑胶光场"),
-    ARCHITECTURAL_GRID("建筑网格"),
+    POSTER_WALL("唱片海报墙"),
+    VINTAGE_HIFI("复古音响"),
+    SPATIAL_GALLERY("空间唱片廊"),
 }
 
 enum class DesktopSpectrumStyle(val label: String) {

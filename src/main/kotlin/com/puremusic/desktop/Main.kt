@@ -17,6 +17,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.unit.min
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -877,10 +880,27 @@ fun main() = application {
                                 }
                             },
                             onClose = { showImmersiveStage = false },
+                            onSelectSong = { chosen ->
+                                val idx = allSongs.indexOfFirst { it.id == chosen.id }
+                                if (idx >= 0) playFromQueue(allSongs, idx)
+                            },
                             onTogglePlayPause = { engine.togglePlayPause() },
                             onSkipPrevious = { skipPrevious() },
                             onSkipNext = { skipNext() },
+                            onCycleRepeat = {
+                                val next = when (playerState.repeatMode) {
+                                    RepeatMode.OFF -> RepeatMode.ALL
+                                    RepeatMode.ALL -> RepeatMode.ONE
+                                    RepeatMode.ONE -> RepeatMode.OFF
+                                }
+                                playerState = playerState.copy(repeatMode = next)
+                            },
+                            onToggleShuffle = { playerState = playerState.copy(shuffleEnabled = !playerState.shuffleEnabled) },
                             onSeekTo = { engine.seekTo(it) },
+                            onVolumeChange = { vol ->
+                                playerState = playerState.copy(volume = vol)
+                                engine.setVolume(vol)
+                            },
                         )
                     }
                 }
@@ -2089,191 +2109,325 @@ private fun DesktopSettingsPane(
     onRemoveFolder: (String) -> Unit,
     onRescan: () -> Unit,
 ) {
-    val cardShape = RoundedCornerShape(14.dp)
+    var selectedSection by remember { mutableStateOf(0) }
+    val sections = listOf("外观与字体", "音乐文件夹", "播放与定时", "关于")
+    val cardShape = RoundedCornerShape(16.dp)
     val surface = MaterialTheme.colorScheme.surface
     val outline = MaterialTheme.colorScheme.outline
+    val accent = MaterialTheme.colorScheme.primary
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
-        contentPadding = PaddingValues(vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        item(key = "set_title") {
-            Text("设置", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        }
-
-        // Appearance Card
-        item(key = "set_appearance") {
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.75.dp, outline, cardShape).padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                // Light / Dark Paper
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("纸色模式", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(false to "宣纸浅色", true to "夜读深色").forEach { (dm, lbl) ->
-                            val sel = config.darkMode == dm
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (sel) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onToggleDarkMode(dm) }
-                                    .padding(horizontal = 14.dp, vertical = 7.dp),
-                            ) {
-                                Text(lbl, fontSize = 12.sp, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, color = if (sel) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider(thickness = 0.6.dp, color = outline)
-
-                // 6 Book-Spine Accent Colors
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("书脊装帧色", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                        Text(config.accentColor.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        DesktopAccentColor.entries.forEach { ac ->
-                            val sel = ac == config.accentColor
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onSelectAccent(ac) }) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(34.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(ac.hex))
-                                        .border(if (sel) 2.dp else 0.dp, if (sel) MaterialTheme.colorScheme.onBackground else Color.Transparent, RoundedCornerShape(8.dp)),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    if (sel) Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(ac.shortLabel, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider(thickness = 0.6.dp, color = outline)
-
-                // Layout Density
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("排版密度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        DesktopLayoutDensity.entries.forEach { d ->
-                            val sel = d == config.layoutDensity
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (sel) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.surfaceVariant)
-                                    .clickable { onSelectDensity(d) }
-                                    .padding(horizontal = 14.dp, vertical = 7.dp),
-                            ) {
-                                Text(d.label, fontSize = 12.sp, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, color = if (sel) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider(thickness = 0.6.dp, color = outline)
-
-                // Global Font Scale
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("全局字体大小", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(104.dp))
-                    Slider(
-                        value = config.fontScale,
-                        onValueChange = onFontScaleChange,
-                        valueRange = 0.85f..1.25f,
-                        modifier = Modifier.weight(1f),
-                        colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
-                    )
-                    Text("${(config.fontScale * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.width(48.dp), textAlign = TextAlign.End)
-                }
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxHeight()
+                .widthIn(max = 860.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 28.dp),
+            contentPadding = PaddingValues(vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            item(key = "set_hdr") {
+                Text("设置", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = ink)
             }
-        }
 
-        // Sleep Timer Card
-        item(key = "set_sleep") {
-            Row(
-                modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.75.dp, outline, cardShape).padding(18.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Rounded.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                    Text("睡眠定时暂停", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(0 to "关闭", 15 to "15分钟", 30 to "30分钟", 60 to "60分钟").forEach { (mins, lbl) ->
-                        val active = (mins == 0 && sleepTimerRemainingSec == null) || (mins > 0 && sleepTimerRemainingSec != null && ((sleepTimerRemainingSec + 59) / 60) in (mins - 14)..mins)
+            // Sleek Horizontal Segmented Pill Bar (matching reference #6)
+            item(key = "set_tabs") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    sections.forEachIndexed { idx, label ->
+                        val sel = idx == selectedSection
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable { onSetSleepTimerMin(mins) }
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                .background(if (sel) surface else Color.Transparent)
+                                .then(if (sel) Modifier.border(0.7.dp, outline, RoundedCornerShape(10.dp)) else Modifier)
+                                .clickable { selectedSection = idx }
+                                .padding(horizontal = 18.dp, vertical = 9.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Text(lbl, fontSize = 12.sp, color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (sel) accent else muted,
+                            )
                         }
                     }
                 }
             }
-        }
 
-        // Music Folders Card
-        item(key = "set_folders") {
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.75.dp, outline, cardShape).padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("本地音乐文件夹", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = onRescan) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("重新扫描", fontSize = 12.sp)
-                        }
-                        TextButton(onClick = onAddFolder) {
-                            Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("添加目录", fontSize = 12.sp)
-                        }
-                    }
-                }
-                if (config.folders.isEmpty()) {
-                    Text("暂未添加本地音乐目录", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    config.folders.forEach { folderPath ->
-                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(folderPath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { onRemoveFolder(folderPath) }, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Rounded.DeleteOutline, contentDescription = "移除目录", modifier = Modifier.size(16.dp))
+            when (selectedSection) {
+                0 -> {
+                    item(key = "sec_appearance") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(cardShape)
+                                .background(surface)
+                                .border(0.75.dp, outline, cardShape)
+                                .padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(20.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column {
+                                    Text("外观与字体", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = ink)
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text("选择后自动保存，让阅读和聆听更自在。", style = MaterialTheme.typography.bodySmall, color = muted)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .border(0.75.dp, outline, RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            onToggleDarkMode(false)
+                                            onSelectAccent(DesktopAccentColor.CINNABAR)
+                                            onSelectDensity(DesktopLayoutDensity.STANDARD)
+                                            onFontScaleChange(1.0f)
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                                ) {
+                                    Text("恢复默认", fontSize = 12.sp, color = ink)
+                                }
+                            }
+
+                            // Signature Live Appearance & Typography Preview Card (with left accent bar)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.background)
+                                    .border(0.75.dp, outline, RoundedCornerShape(12.dp)),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(4.dp)
+                                        .height(132.dp)
+                                        .background(accent),
+                                )
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text("简约音乐 · 外观预览", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                                    Text("把喜欢的音乐，留在身边。", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                    Text("让晚风陪着音乐", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = ink)
+                                    Text("Simple moments, beautiful music.", style = MaterialTheme.typography.bodySmall, color = muted)
+                                }
+                            }
+
+                            // Theme Mode Row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column {
+                                    Text("界面主题", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink)
+                                    Text("应用于音乐库、歌单和设置；沉浸场景保留各自材质与氛围。", style = MaterialTheme.typography.bodySmall, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(false to "宣纸浅色", true to "夜读深色").forEach { (dm, lbl) ->
+                                        val sel = config.darkMode == dm
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(if (sel) ink else MaterialTheme.colorScheme.surfaceVariant)
+                                                .clickable { onToggleDarkMode(dm) }
+                                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                        ) {
+                                            Text(lbl, fontSize = 12.sp, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, color = if (sel) MaterialTheme.colorScheme.background else muted)
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(thickness = 0.6.dp, color = outline)
+
+                            // Accent Color Row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column {
+                                    Text("书脊强调色", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink)
+                                    Text("用于导航选中状态、主按钮与进度高亮。", style = MaterialTheme.typography.bodySmall, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    DesktopAccentColor.entries.forEach { ac ->
+                                        val sel = ac == config.accentColor
+                                        Box(
+                                            modifier = Modifier
+                                                .size(30.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color(ac.hex))
+                                                .border(if (sel) 2.dp else 0.dp, if (sel) ink else Color.Transparent, RoundedCornerShape(8.dp))
+                                                .clickable { onSelectAccent(ac) },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (sel) Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(thickness = 0.6.dp, color = outline)
+
+                            // Density Row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column {
+                                    Text("列表间距与排版密度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink)
+                                    Text("调整音乐列表、专辑网格与歌单卡片的留白节奏。", style = MaterialTheme.typography.bodySmall, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    DesktopLayoutDensity.entries.forEach { d ->
+                                        val sel = d == config.layoutDensity
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(if (sel) ink else MaterialTheme.colorScheme.surfaceVariant)
+                                                .clickable { onSelectDensity(d) }
+                                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                                        ) {
+                                            Text(d.label, fontSize = 12.sp, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, color = if (sel) MaterialTheme.colorScheme.background else muted)
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(thickness = 0.6.dp, color = outline)
+
+                            // Font Scale Row
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.width(220.dp)) {
+                                    Text("全局字号缩放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink)
+                                    Text("当前 ${(config.fontScale * 100).toInt()}%", style = MaterialTheme.typography.bodySmall, color = accent)
+                                }
+                                Slider(
+                                    value = config.fontScale,
+                                    onValueChange = onFontScaleChange,
+                                    valueRange = 0.85f..1.25f,
+                                    modifier = Modifier.weight(1f),
+                                    colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent),
+                                )
                             }
                         }
                     }
                 }
-            }
-        }
 
-        // Concise Quiet-Luxury About Card
-        item(key = "set_about") {
-            Row(
-                modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.75.dp, outline, cardShape).padding(18.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column {
-                    Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Text("回归音乐本身。纯粹、克制、安静陪伴每一张本地唱片。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                1 -> {
+                    item(key = "sec_folders") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.75.dp, outline, cardShape).padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column {
+                                    Text("本地音乐文件夹", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = ink)
+                                    Text("支持 MP3 / FLAC / WAV / AIFF 无损与高解析音频及内嵌/同目录 LRC 歌词。", style = MaterialTheme.typography.bodySmall, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = onRescan) {
+                                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("重新扫描")
+                                    }
+                                    TextButton(onClick = onAddFolder) {
+                                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("添加目录")
+                                    }
+                                }
+                            }
+                            HorizontalDivider(thickness = 0.6.dp, color = outline)
+                            if (config.folders.isEmpty()) {
+                                Text("暂未添加本地音乐目录", style = MaterialTheme.typography.bodySmall, color = muted)
+                            } else {
+                                config.folders.forEach { folderPath ->
+                                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(folderPath, style = MaterialTheme.typography.bodyMedium, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                        IconButton(onClick = { onRemoveFolder(folderPath) }) {
+                                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "移除目录", modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                Box(
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)).padding(horizontal = 10.dp, vertical = 4.dp),
-                ) {
-                    Text("v2.0.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+
+                2 -> {
+                    item(key = "sec_playback") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.75.dp, outline, cardShape).padding(24.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column {
+                                    Text("睡眠定时暂停", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = ink)
+                                    Text("到达设定时间后自动停止播放并静音释放音频通道。", style = MaterialTheme.typography.bodySmall, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(0 to "关闭", 15 to "15分钟", 30 to "30分钟", 60 to "60分钟").forEach { (mins, lbl) ->
+                                        val active = (mins == 0 && sleepTimerRemainingSec == null) || (mins > 0 && sleepTimerRemainingSec != null && ((sleepTimerRemainingSec + 59) / 60) in (mins - 14)..mins)
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(if (active) accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant)
+                                                .clickable { onSetSleepTimerMin(mins) }
+                                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                                        ) {
+                                            Text(lbl, fontSize = 12.sp, color = if (active) accent else muted, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+                                        }
+                                    }
+                                }
+                            }
+                            HorizontalDivider(thickness = 0.6.dp, color = outline)
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("快捷键一览", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = ink)
+                                Text("• Space：播放 / 暂停     • Esc：退出沉浸全屏或详情页     • ← / →：全屏模式下快退 / 快进 5 秒", style = MaterialTheme.typography.bodySmall, color = muted)
+                            }
+                        }
+                    }
+                }
+
+                else -> {
+                    item(key = "sec_about") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.75.dp, outline, cardShape).padding(24.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = ink)
+                                Text("回归音乐本身。纯粹、克制、安静陪伴每一张本地唱片。", style = MaterialTheme.typography.bodySmall, color = muted)
+                            }
+                            Box(
+                                modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(accent.copy(alpha = 0.14f)).padding(horizontal = 12.dp, vertical = 6.dp),
+                            ) {
+                                Text("v2.1.0", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2481,34 +2635,45 @@ private fun DesktopImmersiveStage(
     onAdjustLyricOffset: (Long) -> Unit,
     onResetLyricOffset: () -> Unit,
     onClose: () -> Unit,
+    onSelectSong: (DesktopSong) -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
+    onCycleRepeat: () -> Unit,
+    onToggleShuffle: () -> Unit,
     onSeekTo: (Long) -> Unit,
+    onVolumeChange: (Float) -> Unit,
 ) {
     val isDarkScene = when (sceneStyle) {
-        DesktopSceneStyle.SPATIAL_GALLERY, DesktopSceneStyle.VINYL_LIGHTFIELD -> true
-        DesktopSceneStyle.VINYL_STUDY, DesktopSceneStyle.ARCHITECTURAL_GRID -> isDarkTheme
+        DesktopSceneStyle.VINYL_STUDY -> isDarkTheme
+        DesktopSceneStyle.VINYL_LIGHTFIELD,
+        DesktopSceneStyle.POSTER_WALL,
+        DesktopSceneStyle.VINTAGE_HIFI,
+        DesktopSceneStyle.SPATIAL_GALLERY,
+        -> true
     }
     val bgBrush = when (sceneStyle) {
-        DesktopSceneStyle.SPATIAL_GALLERY -> Brush.verticalGradient(listOf(Color(0xFF221317), Color(0xFF140D10), Color(0xFF0A0809)))
-        DesktopSceneStyle.VINYL_LIGHTFIELD -> Brush.verticalGradient(listOf(Color(0xFF151922), Color(0xFF0E1117), Color(0xFF080A0D)))
-        DesktopSceneStyle.VINYL_STUDY, DesktopSceneStyle.ARCHITECTURAL_GRID -> Brush.verticalGradient(
-            listOf(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.background),
-        )
+        DesktopSceneStyle.VINYL_STUDY -> Brush.verticalGradient(listOf(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.background))
+        DesktopSceneStyle.VINYL_LIGHTFIELD -> Brush.verticalGradient(listOf(Color(0xFF3E221D), Color(0xFF2B1714), Color(0xFF1A0E0C)))
+        DesktopSceneStyle.POSTER_WALL -> Brush.verticalGradient(listOf(Color(0xFF0E1116), Color(0xFF0A0C10)))
+        DesktopSceneStyle.VINTAGE_HIFI -> Brush.verticalGradient(listOf(Color(0xFF4B433B), Color(0xFF37312B), Color(0xFF211D19)))
+        DesktopSceneStyle.SPATIAL_GALLERY -> Brush.verticalGradient(listOf(Color(0xFF231317), Color(0xFF140D10), Color(0xFF0A0809)))
     }
-    val primaryInk = if (isDarkScene) Color(0xFFF3EEE4) else MaterialTheme.colorScheme.onBackground
-    val secondaryInk = if (isDarkScene) Color(0xFFA69F95) else MaterialTheme.colorScheme.onSurfaceVariant
-    val activeAccent = if (isDarkScene) Color(0xFFE0C08E) else accentColor
+    val primaryInk = if (isDarkScene) Color(0xFFF5F0E6) else MaterialTheme.colorScheme.onBackground
+    val secondaryInk = if (isDarkScene) Color(0xFFB5ACA0) else MaterialTheme.colorScheme.onSurfaceVariant
+    val activeAccent = if (isDarkScene) Color(0xFFE5C487) else accentColor
     var menuExpanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(bgBrush)
-            .padding(horizontal = 36.dp, vertical = 22.dp),
+            .padding(
+                horizontal = if (sceneStyle == DesktopSceneStyle.POSTER_WALL) 16.dp else 40.dp,
+                vertical = 18.dp,
+            ),
     ) {
-        // Minimal Top Bar: Back + Compact Top-Right 2x2 Floating Menu
+        // Sleek Minimal Top Bar: Left '<' Back + Right Frosted Pill (Scene Name + 2x2 Menu)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2517,9 +2682,20 @@ private fun DesktopImmersiveStage(
             IconButton(onClick = onClose) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回曲库", tint = primaryInk)
             }
+
             Box {
-                IconButton(onClick = { menuExpanded = true }) {
-                    Icon(Icons.Rounded.MoreHoriz, contentDescription = "沉浸场景与频谱", tint = primaryInk)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.045f))
+                        .border(0.7.dp, primaryInk.copy(alpha = 0.14f), RoundedCornerShape(12.dp))
+                        .clickable { menuExpanded = true }
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(sceneStyle.label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = primaryInk)
+                    Icon(Icons.Rounded.MoreHoriz, contentDescription = "切换场景与频谱", tint = primaryInk, modifier = Modifier.size(16.dp))
                 }
                 DesktopImmersiveControlMenu(
                     expanded = menuExpanded,
@@ -2537,7 +2713,7 @@ private fun DesktopImmersiveStage(
             }
         }
 
-        // Center Stage switching cleanly across all 4 Mobile Scenes
+        // Main Widescreen Stage (5 Flagship Scenes)
         AnimatedContent(
             targetState = sceneStyle,
             transitionSpec = {
@@ -2547,6 +2723,222 @@ private fun DesktopImmersiveStage(
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) { targetScene ->
             when (targetScene) {
+                // 1. 动感黑胶书房 (Reference #1: Left Square Sleeve + 35% Peeking Vinyl, Right Oversized 44sp Editorial Lyrics)
+                DesktopSceneStyle.VINYL_STUDY -> {
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val sleeveSize = min(maxHeight * 0.62f, maxWidth * 0.29f).coerceIn(220.dp, 340.dp)
+                        val discSize = sleeveSize * 0.92f
+                        Row(
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(64.dp),
+                        ) {
+                            Column(
+                                modifier = Modifier.width(sleeveSize + discSize * 0.36f),
+                                horizontalAlignment = Alignment.Start,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(sleeveSize + discSize * 0.36f)
+                                        .height(sleeveSize)
+                                        .clickable(onClick = onTogglePlayPause),
+                                    contentAlignment = Alignment.CenterStart,
+                                ) {
+                                    DesktopSpinningVinylDisc(
+                                        filePath = song.filePath,
+                                        rotationDegrees = vinylRotation,
+                                        discSize = discSize,
+                                        modifier = Modifier.align(Alignment.CenterEnd),
+                                    )
+                                    DesktopAlbumCover(
+                                        filePath = song.filePath,
+                                        modifier = Modifier
+                                            .align(Alignment.CenterStart)
+                                            .size(sleeveSize)
+                                            .shadow(22.dp, RoundedCornerShape(4.dp)),
+                                        cornerRadius = 4.dp,
+                                        iconSize = 54.dp,
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Text(song.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = secondaryInk, maxLines = 1)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                DesktopAudioSpecStamp(song = song, isDarkSurface = isDarkScene, accentColor = activeAccent)
+                            }
+
+                            DesktopEditorialLyrics(
+                                lyrics = lyrics,
+                                activeIdx = activeLyricIdx,
+                                activeColor = primaryInk,
+                                accentColor = activeAccent,
+                                secondaryColor = secondaryInk,
+                                mutedColor = secondaryInk,
+                                horizontalAlignment = Alignment.Start,
+                                textAlign = TextAlign.Start,
+                                highlightAccent = true,
+                                maxActiveSp = 46f,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+
+                // 2. 黑胶光场 (Reference #2: Giant 68%-Height Spinning Vinyl + Long Tonearm + Oversized Lyrics + Ivory Play Circle)
+                DesktopSceneStyle.VINYL_LIGHTFIELD -> {
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val giantDisc = min(maxHeight * 0.74f, maxWidth * 0.42f).coerceIn(280.dp, 460.dp)
+                        Row(
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(56.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    DesktopSpinningVinylDisc(
+                                        filePath = song.filePath,
+                                        rotationDegrees = vinylRotation,
+                                        discSize = giantDisc,
+                                        modifier = Modifier.clickable(onClick = onTogglePlayPause),
+                                    )
+                                    DesktopTonearm(
+                                        isPlaying = playerState.isPlaying,
+                                        length = giantDisc * 0.68f,
+                                        modifier = Modifier.align(Alignment.TopEnd).offset(x = giantDisc * 0.14f, y = (-8).dp),
+                                    )
+                                }
+                            }
+
+                            Column(
+                                modifier = Modifier.weight(1.05f),
+                                horizontalAlignment = Alignment.Start,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text(song.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(song.artist, style = MaterialTheme.typography.bodyLarge, color = secondaryInk, maxLines = 1)
+                                Spacer(modifier = Modifier.height(10.dp))
+                                DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent)
+                                Spacer(modifier = Modifier.height(28.dp))
+                                DesktopEditorialLyrics(
+                                    lyrics = lyrics,
+                                    activeIdx = activeLyricIdx,
+                                    activeColor = primaryInk,
+                                    accentColor = activeAccent,
+                                    secondaryColor = secondaryInk,
+                                    mutedColor = secondaryInk,
+                                    horizontalAlignment = Alignment.Start,
+                                    textAlign = TextAlign.Start,
+                                    maxActiveSp = 40f,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Spacer(modifier = Modifier.height(30.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                                ) {
+                                    IconButton(onClick = onSkipPrevious) { Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", tint = primaryInk, modifier = Modifier.size(26.dp)) }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(58.dp)
+                                            .shadow(12.dp, CircleShape)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFF3EFE6))
+                                            .clickable(onClick = onTogglePlayPause),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                            contentDescription = "播放/暂停",
+                                            tint = Color(0xFF1D1A17),
+                                            modifier = Modifier.size(30.dp),
+                                        )
+                                    }
+                                    IconButton(onClick = onSkipNext) { Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", tint = primaryInk, modifier = Modifier.size(26.dp)) }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. 唱片海报墙 (Reference #3: Full-Bleed Clickable Album Wall + Giant Centered Vinyl)
+                DesktopSceneStyle.POSTER_WALL -> {
+                    DesktopPosterWallStage(
+                        currentSong = song,
+                        allSongs = allSongs,
+                        vinylRotation = vinylRotation,
+                        lyrics = lyrics,
+                        activeLyricIdx = activeLyricIdx,
+                        accentColor = activeAccent,
+                        onSelectSong = onSelectSong,
+                        onTogglePlayPause = onTogglePlayPause,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
+                // 4. 复古音响 (Reference #4: Sunlit Upper Showcase + Walnut Brushed-Aluminum Dual-VU Stereo Receiver)
+                DesktopSceneStyle.VINTAGE_HIFI -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(36.dp),
+                        ) {
+                            DesktopAlbumCover(
+                                filePath = song.filePath,
+                                modifier = Modifier
+                                    .size(210.dp)
+                                    .shadow(20.dp, RoundedCornerShape(4.dp))
+                                    .clickable(onClick = onTogglePlayPause),
+                                cornerRadius = 4.dp,
+                                iconSize = 48.dp,
+                            )
+                            Column(modifier = Modifier.width(200.dp)) {
+                                Text(song.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFFF6F1E6), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFC4BBB0), maxLines = 1)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = Color(0xFFE5C487))
+                            }
+                            DesktopEditorialLyrics(
+                                lyrics = lyrics,
+                                activeIdx = activeLyricIdx,
+                                activeColor = Color(0xFFF6F1E6),
+                                accentColor = Color(0xFFE5C487),
+                                secondaryColor = Color(0xFFC8BFB4),
+                                mutedColor = Color(0xFFA69D92),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                textAlign = TextAlign.Center,
+                                maxActiveSp = 34f,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+
+                        DesktopVintageReceiverDeck(
+                            playerState = playerState,
+                            onTogglePlayPause = onTogglePlayPause,
+                            onSkipPrevious = onSkipPrevious,
+                            onSkipNext = onSkipNext,
+                            onCycleRepeat = onCycleRepeat,
+                            onToggleShuffle = onToggleShuffle,
+                            onSeekTo = onSeekTo,
+                            onVolumeChange = onVolumeChange,
+                        )
+                    }
+                }
+
+                // 5. 空间唱片廊 (Flagship 3D Metallic-Spined Stepped Corridor)
                 DesktopSceneStyle.SPATIAL_GALLERY -> {
                     Column(
                         modifier = Modifier.fillMaxSize(),
@@ -2559,7 +2951,7 @@ private fun DesktopImmersiveStage(
                             onTogglePlayPause = onTogglePlayPause,
                             onSkipPrevious = onSkipPrevious,
                             onSkipNext = onSkipNext,
-                            modifier = Modifier.weight(1.25f).fillMaxWidth(),
+                            modifier = Modifier.weight(1.3f).fillMaxWidth(),
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(song.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -2577,138 +2969,24 @@ private fun DesktopImmersiveStage(
                         )
                     }
                 }
-
-                DesktopSceneStyle.VINYL_STUDY, DesktopSceneStyle.VINYL_LIGHTFIELD -> {
-                    Row(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(48.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                DesktopSpinningVinylDisc(
-                                    filePath = song.filePath,
-                                    rotationDegrees = vinylRotation,
-                                    discSize = 310.dp,
-                                    modifier = Modifier.clickable(onClick = onTogglePlayPause),
-                                )
-                                DesktopTonearm(
-                                    isPlaying = playerState.isPlaying,
-                                    length = 210.dp,
-                                    modifier = Modifier.align(Alignment.TopEnd).offset(x = 58.dp, y = (-12).dp),
-                                )
-                            }
-                        }
-
-                        Column(
-                            modifier = Modifier.weight(1.1f),
-                            horizontalAlignment = Alignment.Start,
-                            verticalArrangement = Arrangement.Center,
-                        ) {
-                            Text(song.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("${song.artist} · ${song.album}", style = MaterialTheme.typography.bodyLarge, color = secondaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Spacer(modifier = Modifier.height(10.dp))
-                            DesktopAudioSpecStamp(song = song, isDarkSurface = isDarkScene, accentColor = activeAccent)
-                            Spacer(modifier = Modifier.height(26.dp))
-                            DesktopThreeSlotLyrics(
-                                lyrics = lyrics,
-                                activeIdx = activeLyricIdx,
-                                activeColor = primaryInk,
-                                secondaryColor = secondaryInk,
-                                mutedColor = secondaryInk.copy(alpha = 0.65f),
-                                horizontalAlignment = Alignment.Start,
-                                textAlign = TextAlign.Start,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Spacer(modifier = Modifier.height(22.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                IconButton(onClick = onSkipPrevious) { Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", tint = primaryInk) }
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape)
-                                        .background(activeAccent)
-                                        .clickable(onClick = onTogglePlayPause),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                        contentDescription = "播放/暂停",
-                                        tint = if (isDarkScene) Color(0xFF141312) else MaterialTheme.colorScheme.onPrimary,
-                                        modifier = Modifier.size(26.dp),
-                                    )
-                                }
-                                IconButton(onClick = onSkipNext) { Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", tint = primaryInk) }
-                            }
-                        }
-                    }
-                }
-
-                DesktopSceneStyle.ARCHITECTURAL_GRID -> {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        // Subtle architectural Swiss editorial grid backdrop
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val gridColor = primaryInk.copy(alpha = 0.06f)
-                            val cols = 6
-                            val rows = 4
-                            for (c in 1 until cols) {
-                                val x = size.width * c / cols
-                                drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-                            }
-                            for (r in 1 until rows) {
-                                val y = size.height * r / rows
-                                drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-                            }
-                        }
-                        Column(
-                            modifier = Modifier.fillMaxSize().padding(horizontal = 42.dp),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.Start,
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                DesktopAlbumCover(filePath = song.filePath, modifier = Modifier.size(64.dp), cornerRadius = 8.dp, iconSize = 24.dp)
-                                Column {
-                                    Text(song.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = primaryInk)
-                                    Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = secondaryInk)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    DesktopAudioSpecStamp(song = song, isDarkSurface = isDarkScene, accentColor = activeAccent)
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(34.dp))
-                            DesktopThreeSlotLyrics(
-                                lyrics = lyrics,
-                                activeIdx = activeLyricIdx,
-                                activeColor = activeAccent,
-                                secondaryColor = primaryInk,
-                                mutedColor = secondaryInk.copy(alpha = 0.65f),
-                                horizontalAlignment = Alignment.Start,
-                                textAlign = TextAlign.Start,
-                                modifier = Modifier.fillMaxWidth(0.85f),
-                            )
-                        }
-                    }
-                }
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Silky 60fps Zero-Stick 256-Point FFT Live Spectrum SeekBar
-        DesktopLiveSpectrumBar(
-            songId = song.id,
-            positionMs = playerState.positionMs,
-            durationMs = playerState.durationMs,
-            isPlaying = playerState.isPlaying,
-            spectrumStyle = spectrumStyle,
-            playedColor = primaryInk,
-            unplayedColor = primaryInk.copy(alpha = 0.24f),
-            accentColor = activeAccent,
-            timestampColor = secondaryInk,
-            onSeekTo = onSeekTo,
-        )
+        // Silky 60fps 256-Point FFT Live Spectrum (shown on all scenes except Vintage Hi-Fi which has its own dual VU + seek bar)
+        if (sceneStyle != DesktopSceneStyle.VINTAGE_HIFI) {
+            Spacer(modifier = Modifier.height(8.dp))
+            DesktopLiveSpectrumBar(
+                songId = song.id,
+                positionMs = playerState.positionMs,
+                durationMs = playerState.durationMs,
+                isPlaying = playerState.isPlaying,
+                spectrumStyle = spectrumStyle,
+                playedColor = primaryInk,
+                unplayedColor = primaryInk.copy(alpha = 0.24f),
+                accentColor = activeAccent,
+                timestampColor = secondaryInk,
+                onSeekTo = onSeekTo,
+            )
+        }
     }
 }
