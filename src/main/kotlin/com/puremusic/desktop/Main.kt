@@ -2909,7 +2909,7 @@ private fun DesktopImmersiveStage(
     ) {
         // Auto-hiding Minimal Top Bar (fades out after 3s idle for 100% pure art; glides back on mouse move)
         Box(modifier = Modifier.fillMaxWidth().height(42.dp)) {
-        AnimatedVisibility(
+        androidx.compose.animation.AnimatedVisibility(
             visible = controlsVisible || menuExpanded,
             enter = fadeIn(tween(180)),
             exit = fadeOut(tween(420)),
