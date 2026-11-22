@@ -36,7 +36,7 @@ compose.desktop {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "PureMusic"
             packageVersion = "1.0.0"
-            description = "简约音乐 PureMusic — 纯粹原生离线本地音乐播放器"
+            description = "PureMusic - Native Offline Hi-Res Local Music Player"
             vendor = "PureMusic"
             includeAllModules = true
 
