@@ -1,12 +1,19 @@
 package com.puremusic.desktop
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -15,98 +22,130 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.jetbrains.skia.Image as SkiaImage
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
+object ArtworkMemoryCache {
+    private val map = object : LinkedHashMap<String, ImageBitmap?>(96, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap?>?): Boolean = size > 140
+    }
+
+    @Synchronized fun get(key: String): ImageBitmap? = map[key]
+    @Synchronized fun contains(key: String): Boolean = map.containsKey(key)
+    @Synchronized fun put(key: String, bmp: ImageBitmap?) { map[key] = bmp }
+}
+
 @Composable
-fun rememberSongArtwork(songPath: String?): ImageBitmap? {
-    var bitmap by remember(songPath) { mutableStateOf(songPath?.let { ArtworkCache.get(it) }) }
-    LaunchedEffect(songPath) {
-        if (songPath == null) {
+fun rememberSongArtwork(filePath: String?): ImageBitmap? {
+    var bitmap by remember(filePath) {
+        mutableStateOf(if (filePath != null && ArtworkMemoryCache.contains(filePath)) ArtworkMemoryCache.get(filePath) else null)
+    }
+    LaunchedEffect(filePath) {
+        if (filePath == null) {
             bitmap = null
             return@LaunchedEffect
         }
-        if (ArtworkCache.contains(songPath)) {
-            bitmap = ArtworkCache.get(songPath)
+        if (ArtworkMemoryCache.contains(filePath)) {
+            bitmap = ArtworkMemoryCache.get(filePath)
             return@LaunchedEffect
         }
-        bitmap = withContext(Dispatchers.IO) { LibraryScanner.loadArtwork(songPath) }
+        val loaded = withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = DesktopLibraryScanner.loadArtwork(filePath) ?: return@runCatching null
+                SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap()
+            }.getOrNull()
+        }
+        ArtworkMemoryCache.put(filePath, loaded)
+        bitmap = loaded
     }
     return bitmap
 }
 
 @Composable
 fun DesktopAlbumCover(
-    bitmap: ImageBitmap?,
+    filePath: String?,
     modifier: Modifier = Modifier,
-    cornerRadius: Dp = 0.dp,
+    cornerRadius: Dp = 8.dp,
+    iconSize: Dp = 24.dp,
 ) {
-    val shape = if (cornerRadius == 0.dp) RoundedCornerShape(0.dp) else RoundedCornerShape(cornerRadius)
+    val bmp = rememberSongArtwork(filePath)
+    val shape = RoundedCornerShape(cornerRadius)
     Box(
         modifier = modifier
             .clip(shape)
-            .background(Color(0xFF211F1D)),
+            .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
-        if (bitmap != null) {
+        if (bmp != null) {
             Image(
-                bitmap = bitmap,
+                bitmap = bmp,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -115,185 +154,503 @@ fun DesktopAlbumCover(
             Icon(
                 imageVector = Icons.Rounded.MusicNote,
                 contentDescription = null,
-                tint = Color(0xFFC83E2B).copy(alpha = 0.72f),
-                modifier = Modifier.size(36.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.52f),
+                modifier = Modifier.size(iconSize),
             )
         }
     }
 }
 
-/**
- * 96-groove audiophile brushed-silver black vinyl LP (direct port of PureMusic Android).
- */
+@Composable
+fun DesktopAudioSpecStamp(
+    song: DesktopSong,
+    isDarkSurface: Boolean,
+    accentColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val hiResBg = if (isDarkSurface) Color(0xFFE6C896).copy(alpha = 0.18f) else accentColor.copy(alpha = 0.12f)
+    val hiResInk = if (isDarkSurface) Color(0xFFE6C896) else accentColor
+    val specBorder = if (isDarkSurface) Color.White.copy(alpha = 0.24f) else MaterialTheme.colorScheme.outline
+    val specInk = if (isDarkSurface) Color(0xFFD5CFC6) else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (song.isHiRes || song.isLossless) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(hiResBg)
+                    .border(0.7.dp, hiResInk.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = if (song.isHiRes) "Hi-Res" else "SQ",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = hiResInk,
+                    letterSpacing = 0.4.sp,
+                )
+            }
+        }
+        if (song.audioSpecText.isNotBlank()) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(5.dp))
+                    .border(0.7.dp, specBorder, RoundedCornerShape(5.dp))
+                    .padding(horizontal = 7.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = song.audioSpecText,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = specInk,
+                    letterSpacing = 0.3.sp,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun DesktopSpinningVinylDisc(
-    artwork: ImageBitmap?,
-    rotationProvider: () -> Float,
+    filePath: String?,
+    rotationDegrees: Float,
     discSize: Dp,
+    modifier: Modifier = Modifier,
 ) {
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(discSize)
-            .shadow(24.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.55f))
-            .clip(CircleShape),
+            .shadow(22.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.55f))
+            .graphicsLayer { rotationZ = rotationDegrees },
         contentAlignment = Alignment.Center,
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val radius = size.minDimension / 2f
-            val center = Offset(size.width / 2f, size.height / 2f)
-
+            val r = size.minDimension / 2f
+            val c = Offset(size.width / 2f, size.height / 2f)
             drawCircle(
                 brush = Brush.radialGradient(
-                    0.00f to Color(0xFF070709),
-                    0.42f to Color(0xFF0B0B0D),
-                    0.72f to Color(0xFF141417),
-                    0.95f to Color(0xFF0C0C0E),
-                    1.00f to Color(0xFF17171A),
-                    center = center,
-                    radius = radius,
+                    0.0f to Color(0xFF151517),
+                    0.66f to Color(0xFF0A0A0C),
+                    0.92f to Color(0xFF1C1C20),
+                    1.0f to Color(0xFF070709),
+                    center = c,
+                    radius = r,
                 ),
-                radius = radius,
-                center = center,
+                radius = r,
+                center = c,
             )
-
+            // Fine micro-grooves
+            for (g in 1..28) {
+                val frac = 0.38f + g * 0.0205f
+                drawCircle(
+                    color = Color.White.copy(alpha = if (g % 5 == 0) 0.075f else 0.032f),
+                    radius = r * frac,
+                    center = c,
+                    style = Stroke(width = 0.7f),
+                )
+            }
+            // Dual specular light sweeps
             drawCircle(
                 brush = Brush.sweepGradient(
                     0.00f to Color.Transparent,
-                    0.26f to Color.Transparent,
-                    0.375f to Color(0xFFEAECEF).copy(alpha = 0.34f),
-                    0.50f to Color.Transparent,
-                    0.76f to Color.Transparent,
-                    0.875f to Color(0xFFEAECEF).copy(alpha = 0.36f),
-                    0.99f to Color.Transparent,
-                    center = center,
+                    0.10f to Color.White.copy(alpha = 0.14f),
+                    0.22f to Color.Transparent,
+                    0.52f to Color.Transparent,
+                    0.62f to Color.White.copy(alpha = 0.12f),
+                    0.74f to Color.Transparent,
+                    1.00f to Color.Transparent,
+                    center = c,
                 ),
-                radius = radius * 0.96f,
-                center = center,
+                radius = r * 0.97f,
+                center = c,
             )
-
-            for (i in 0..95) {
-                val factor = 0.435f + i * 0.00545f
-                val isGap = i == 26 || i == 54 || i == 80
-                when {
-                    isGap -> drawCircle(
-                        color = Color.Black.copy(alpha = 0.48f),
-                        radius = radius * factor,
-                        center = center,
-                        style = Stroke(width = 2.0f),
-                    )
-                    i % 2 == 0 -> drawCircle(
-                        color = Color.White.copy(alpha = if (i % 6 == 0) 0.11f else 0.055f),
-                        radius = radius * factor,
-                        center = center,
-                        style = Stroke(width = 0.55f),
-                    )
-                    else -> drawCircle(
-                        color = Color.Black.copy(alpha = 0.28f),
-                        radius = radius * factor,
-                        center = center,
-                        style = Stroke(width = 0.75f),
-                    )
-                }
-            }
-
-            drawCircle(
-                color = Color.White.copy(alpha = 0.12f),
-                radius = radius - 1.2f,
-                center = center,
-                style = Stroke(width = 1.1f),
-            )
+            drawCircle(color = Color.White.copy(alpha = 0.14f), radius = r - 0.6f, center = c, style = Stroke(1.1f))
         }
+
+        DesktopAlbumCover(
+            filePath = filePath,
+            modifier = Modifier
+                .size(discSize * 0.42f)
+                .border(1.5.dp, Color(0xFF282624), CircleShape),
+            cornerRadius = discSize * 0.21f,
+            iconSize = discSize * 0.14f,
+        )
 
         Box(
             modifier = Modifier
-                .size(discSize * 0.37f)
-                .graphicsLayer { rotationZ = rotationProvider() }
+                .size(discSize * 0.068f)
                 .clip(CircleShape)
-                .border(1.5.dp, Color(0xFF0A0A0B), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            DesktopAlbumCover(bitmap = artwork, modifier = Modifier.fillMaxSize(), cornerRadius = discSize)
-            Box(
-                modifier = Modifier
-                    .size(discSize * 0.045f)
-                    .clip(CircleShape)
-                    .background(Color(0xFF141416))
-                    .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape),
-            )
-        }
+                .background(Color(0xFF141312))
+                .border(1.2.dp, Color(0xFFDFD7C8), CircleShape),
+        )
     }
 }
 
 @Composable
 fun DesktopTonearm(
     isPlaying: Boolean,
+    length: Dp = 156.dp,
     modifier: Modifier = Modifier,
 ) {
     val angle by animateFloatAsState(
-        targetValue = if (isPlaying) 24f else 4f,
-        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessLow),
+        targetValue = if (isPlaying) 19f else -10f,
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessLow),
         label = "desktopTonearm",
     )
-    val champagneLight = Color(0xFFE8D8BE)
-    val champagneMid = Color(0xFFCBB696)
+    Canvas(
+        modifier = modifier
+            .width(length * 0.56f)
+            .height(length)
+            .graphicsLayer {
+                transformOrigin = TransformOrigin(0.55f, 0.12f)
+                rotationZ = angle
+            },
+    ) {
+        val pivot = Offset(size.width * 0.55f, size.height * 0.12f)
+        val elbow = Offset(size.width * 0.48f, size.height * 0.72f)
+        val head = Offset(size.width * 0.30f, size.height * 0.89f)
 
-    Canvas(modifier = modifier) {
-        val pivot = Offset(size.width * 0.72f, size.height * 0.14f)
-        drawCircle(color = Color(0xFF1E1D1C), radius = size.width * 0.24f, center = pivot)
-        drawCircle(
-            color = champagneLight.copy(alpha = 0.30f),
-            radius = size.width * 0.24f,
-            center = pivot,
-            style = Stroke(width = 1.6f),
-        )
-        drawCircle(
-            brush = Brush.linearGradient(listOf(champagneLight, Color(0xFF8F7B5E))),
-            radius = size.width * 0.09f,
-            center = pivot,
-        )
+        drawCircle(Color(0xFF1F1D1B), radius = 18f, center = pivot)
+        drawCircle(Color(0xFFE0C89B), radius = 11f, center = pivot)
+        drawCircle(Color(0xFF2B2825), radius = 4.5f, center = pivot)
 
-        rotate(degrees = angle, pivot = pivot) {
-            val armEnd = Offset(pivot.x - size.width * 0.05f, pivot.y + size.height * 0.66f)
-            drawLine(
-                color = Color.Black.copy(alpha = 0.50f),
-                start = Offset(pivot.x + 5f, pivot.y + 6f),
-                end = Offset(armEnd.x + 5f, armEnd.y + 6f),
-                strokeWidth = 10f,
-                cap = StrokeCap.Round,
-            )
-            drawLine(
-                brush = Brush.horizontalGradient(listOf(Color(0xFF9C9890), Color(0xFFF0EAE0), Color(0xFF77726B))),
-                start = pivot,
-                end = armEnd,
-                strokeWidth = 8.5f,
-                cap = StrokeCap.Round,
-            )
-            drawRoundRect(
-                brush = Brush.verticalGradient(listOf(Color(0xFF2B2825), Color(0xFF171514))),
-                topLeft = Offset(armEnd.x - 12f, armEnd.y - 4f),
-                size = Size(24f, 34f),
-                cornerRadius = CornerRadius(4f, 4f),
-            )
-            drawRoundRect(
-                color = champagneMid.copy(alpha = 0.45f),
-                topLeft = Offset(armEnd.x - 12f, armEnd.y - 4f),
-                size = Size(24f, 34f),
-                cornerRadius = CornerRadius(4f, 4f),
-                style = Stroke(width = 1.1f),
-            )
-            drawLine(
-                color = champagneLight.copy(alpha = 0.85f),
-                start = Offset(armEnd.x + 11f, armEnd.y + 8f),
-                end = Offset(armEnd.x + 22f, armEnd.y + 16f),
-                strokeWidth = 2.4f,
-                cap = StrokeCap.Round,
-            )
+        drawLine(Color(0xFFDCD8D0), pivot, elbow, strokeWidth = 4.4f, cap = StrokeCap.Round)
+        drawLine(Color(0xFF9C978E), elbow, head, strokeWidth = 3.8f, cap = StrokeCap.Round)
+        drawLine(Color(0xFF1D1C1A), head, Offset(head.x - 10f, head.y + 13f), strokeWidth = 10f, cap = StrokeCap.Round)
+        drawCircle(Color(0xFFE0C89B), radius = 2.6f, center = Offset(head.x - 9f, head.y + 12f))
+    }
+}
+
+/**
+ * Flagship 3D Spatial Record Gallery (Desktop Widescreen 1:1 port of Android v2.0.3).
+ * Features commanding hero sleeve, 8.5dp brushed-aluminum left spine, 3.5dp top bevel,
+ * diagonal satin sheen, 5 stepped receding sleeves with peeking black vinyl LPs,
+ * inter-sleeve cast shadow, dark AO contact line, and seamless parallel mirror reflection.
+ */
+@Composable
+fun DesktopSpatialRecordGallery(
+    currentSong: DesktopSong,
+    allSongs: List<DesktopSong>,
+    onTogglePlayPause: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val stackSongs = remember(currentSong.id, allSongs) {
+        if (allSongs.isEmpty()) {
+            listOf(currentSong)
+        } else {
+            val idx = allSongs.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0)
+            List(minOf(6, allSongs.size)) { step ->
+                allSongs[(idx + step) % allSongs.size]
+            }
+        }
+    }
+
+    val scope = rememberCoroutineScope()
+    val dragOffsetX = remember { Animatable(0f) }
+    val tapScale = remember { Animatable(1f) }
+    val density = LocalDensity.current.density
+
+    BoxWithConstraints(
+        modifier = modifier
+            .pointerInput(currentSong.id) {
+                detectTapGestures(
+                    onTap = {
+                        scope.launch {
+                            tapScale.animateTo(0.97f, tween(70))
+                            tapScale.animateTo(1f, spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessMedium))
+                        }
+                        onTogglePlayPause()
+                    },
+                )
+            }
+            .pointerInput(currentSong.id) {
+                var totalDrag = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { totalDrag = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        totalDrag += dragAmount
+                        scope.launch { dragOffsetX.snapTo((totalDrag * 0.45f).coerceIn(-120f, 120f)) }
+                    },
+                    onDragEnd = {
+                        if (abs(totalDrag) > 70f) {
+                            if (totalDrag < 0f) onSkipNext() else onSkipPrevious()
+                        }
+                        scope.launch { dragOffsetX.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow)) }
+                    },
+                    onDragCancel = {
+                        scope.launch { dragOffsetX.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow)) }
+                    },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        val frontSize = min(maxWidth * 0.38f, maxHeight * 0.68f).coerceIn(210.dp, 340.dp)
+        val corridorW = frontSize * 1.72f
+        val corridorH = frontSize * 1.38f
+        val baseY = 56.dp
+        val dynamicRotY = 16f + (dragOffsetX.value * 0.06f).coerceIn(-7f, 7f)
+        val camDist = 6.2f * density
+
+        val scaleSteps = floatArrayOf(1.00f, 0.89f, 0.79f, 0.71f, 0.64f, 0.58f)
+        val xFractions = floatArrayOf(0.00f, 0.24f, 0.43f, 0.58f, 0.70f, 0.80f)
+        val yLiftDp = floatArrayOf(0f, 16f, 30f, 41f, 49f, 55f)
+
+        Box(
+            modifier = Modifier
+                .width(corridorW)
+                .height(corridorH)
+                .offset { IntOffset(dragOffsetX.value.roundToInt(), 0) }
+                .graphicsLayer {
+                    scaleX = tapScale.value
+                    scaleY = tapScale.value
+                },
+            contentAlignment = Alignment.TopStart,
+        ) {
+            for (depth in (stackSongs.lastIndex downTo 0)) {
+                val itemSong = stackSongs[depth]
+                val isFront = depth == 0
+                val dIdx = depth.coerceAtMost(scaleSteps.lastIndex)
+                val p = scaleSteps[dIdx]
+                val xShift = frontSize * xFractions[dIdx]
+                val yShift = (baseY - yLiftDp[dIdx].dp).coerceAtLeast(2.dp)
+                val rotY = if (isFront) dynamicRotY else 15f
+                val sleeveAlpha = (1f - depth * 0.07f).coerceAtLeast(0.48f)
+                val spineW = 8.5.dp
+                val topRimH = 3.5.dp
+
+                Column(
+                    modifier = Modifier
+                        .offset(x = xShift, y = yShift)
+                        .width(frontSize + 24.dp)
+                        .graphicsLayer {
+                            transformOrigin = TransformOrigin(0.0f, 0.42f)
+                            scaleX = p
+                            scaleY = p
+                            rotationY = rotY
+                            cameraDistance = camDist
+                            alpha = sleeveAlpha
+                        },
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(frontSize + 24.dp)
+                            .height(frontSize),
+                    ) {
+                        // Sleek glossy black vinyl LP peeking out on receding sleeves
+                        if (depth in 1..4) {
+                            Canvas(
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .size(frontSize * 0.86f),
+                            ) {
+                                val r = size.minDimension * 0.5f
+                                val c = Offset(size.width * 0.5f, size.height * 0.5f)
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        0.0f to Color(0xFF0A0A0B),
+                                        0.72f to Color(0xFF171719),
+                                        0.90f to Color(0xFF28282B),
+                                        1.0f to Color(0xFF0D0D0F),
+                                        center = c,
+                                        radius = r,
+                                    ),
+                                    radius = r,
+                                    center = c,
+                                )
+                                for (g in 1..5) {
+                                    drawCircle(
+                                        color = Color.White.copy(alpha = 0.06f),
+                                        radius = r * (0.64f + g * 0.065f),
+                                        center = c,
+                                        style = Stroke(width = 0.8f),
+                                    )
+                                }
+                            }
+                        }
+
+                        // Physical brushed-aluminum-spined vinyl jacket
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .size(frontSize)
+                                .shadow(
+                                    elevation = if (isFront) 32.dp else 18.dp,
+                                    shape = RoundedCornerShape(3.dp),
+                                    ambientColor = Color.Black,
+                                    spotColor = Color.Black,
+                                )
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFF1E1D1C)),
+                        ) {
+                            Row(modifier = Modifier.fillMaxSize()) {
+                                // 8.5dp Machined Brushed-Aluminum 3D Left Spine
+                                Box(
+                                    modifier = Modifier
+                                        .width(spineW)
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                0.00f to Color(0xFF6B6A67),
+                                                0.18f to Color(0xFFEBE9E5),
+                                                0.46f to Color(0xFFC5C3BE),
+                                                0.78f to Color(0xFF7D7B77),
+                                                0.94f to Color(0xFF3E3D3B),
+                                                1.00f to Color(0xFF1A1918),
+                                            ),
+                                        ),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    0.0f to Color.White.copy(alpha = 0.24f),
+                                                    0.25f to Color.Transparent,
+                                                    0.78f to Color.Black.copy(alpha = 0.18f),
+                                                    1.0f to Color.Black.copy(alpha = 0.36f),
+                                                ),
+                                            ),
+                                    )
+                                }
+
+                                Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+                                    // 3.5dp Beveled Metallic Top Rim
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(topRimH)
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    0.0f to Color(0xFFF0EEEA),
+                                                    0.55f to Color(0xFFB5B3AE),
+                                                    1.0f to Color(0xFF4A4946),
+                                                ),
+                                            ),
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxWidth()
+                                            .background(Color(0xFF161514))
+                                            .padding(1.5.dp)
+                                            .border(0.6.dp, Color.White.copy(alpha = 0.22f), RectangleShape),
+                                    ) {
+                                        DesktopAlbumCover(
+                                            filePath = itemSong.filePath,
+                                            modifier = Modifier.fillMaxSize(),
+                                            cornerRadius = 0.dp,
+                                            iconSize = if (isFront) 54.dp else 32.dp,
+                                        )
+                                        if (isFront) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .background(
+                                                        Brush.linearGradient(
+                                                            0.00f to Color.White.copy(alpha = 0.14f),
+                                                            0.32f to Color.White.copy(alpha = 0.03f),
+                                                            0.52f to Color.Transparent,
+                                                            0.82f to Color.Black.copy(alpha = 0.06f),
+                                                            1.00f to Color.Black.copy(alpha = 0.20f),
+                                                        ),
+                                                    ),
+                                            )
+                                        } else {
+                                            val depthDark = (0.16f + depth * 0.11f).coerceAtMost(0.68f)
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .background(
+                                                        Brush.horizontalGradient(
+                                                            0.0f to Color.Black.copy(alpha = (depthDark + 0.34f).coerceAtMost(0.84f)),
+                                                            0.55f to Color.Black.copy(alpha = depthDark + 0.12f),
+                                                            1.0f to Color.Black.copy(alpha = depthDark),
+                                                        ),
+                                                    ),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Contact Ambient Occlusion (AO) floor shadow anchoring sleeve firmly
+                    Box(
+                        modifier = Modifier
+                            .width(frontSize)
+                            .height(2.5.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    0.0f to Color.Black.copy(alpha = if (isFront) 0.88f else 0.65f),
+                                    1.0f to Color.Black.copy(alpha = 0.0f),
+                                ),
+                            ),
+                    )
+
+                    // Seamless parallel floor mirror reflection (zero V-gap)
+                    if (depth <= 3) {
+                        val reflStrength = when (depth) {
+                            0 -> 0.40f
+                            1 -> 0.20f
+                            2 -> 0.11f
+                            else -> 0.06f
+                        }
+                        Row(
+                            modifier = Modifier
+                                .width(frontSize)
+                                .height(frontSize * 0.30f)
+                                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                                .drawWithContent {
+                                    drawContent()
+                                    drawRect(
+                                        brush = Brush.verticalGradient(
+                                            0.00f to Color.Black.copy(alpha = reflStrength),
+                                            0.52f to Color.Black.copy(alpha = reflStrength * 0.26f),
+                                            1.00f to Color.Transparent,
+                                        ),
+                                        blendMode = BlendMode.DstIn,
+                                    )
+                                }
+                                .clip(RectangleShape),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(spineW)
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            0.0f to Color(0xFF4F4E4B),
+                                            0.35f to Color(0xFFA8A6A1),
+                                            1.0f to Color(0xFF2B2A28),
+                                        ),
+                                    ),
+                            )
+                            DesktopAlbumCover(
+                                filePath = itemSong.filePath,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(frontSize)
+                                    .graphicsLayer { scaleY = -1f },
+                                cornerRadius = 0.dp,
+                                iconSize = 28.dp,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 /**
- * Fixed 3-Slot Auto-Fit Bilingual Lyrics Stage (direct port of Android v1.8).
+ * Fixed 3-Slot Bilingual Lyrics Stage (prev / bold active / translation or next).
  */
 @Composable
 fun DesktopThreeSlotLyrics(
@@ -302,177 +659,168 @@ fun DesktopThreeSlotLyrics(
     activeColor: Color,
     secondaryColor: Color,
     mutedColor: Color,
+    horizontalAlignment: Alignment.Horizontal = Alignment.CenterHorizontally,
+    textAlign: TextAlign = TextAlign.Center,
     modifier: Modifier = Modifier,
 ) {
-    val textMeasurer = rememberTextMeasurer()
+    val activeLine = if (activeIdx in lyrics.indices) lyrics[activeIdx] else null
+    val prevLine = if (activeIdx > 0 && activeIdx - 1 in lyrics.indices) lyrics[activeIdx - 1] else null
+    val nextLine = if (activeIdx >= 0 && activeIdx + 1 in lyrics.indices) lyrics[activeIdx + 1] else null
 
-    Box(modifier = modifier, contentAlignment = Alignment.CenterStart) {
-        if (lyrics.isEmpty() || activeIdx < 0) {
+    val (activePrimary, activeSecondary) = remember(activeLine) {
+        if (activeLine == null) "" to null else splitBilingualLyric(activeLine.primaryText, activeLine.secondaryText)
+    }
+    val line1Text = remember(prevLine) {
+        if (prevLine == null) "" else splitBilingualLyric(prevLine.primaryText, prevLine.secondaryText).first
+    }
+    val line3Text = remember(activeSecondary, nextLine) {
+        when {
+            !activeSecondary.isNullOrBlank() -> activeSecondary
+            nextLine != null -> splitBilingualLyric(nextLine.primaryText, nextLine.secondaryText).first
+            else -> ""
+        }
+    }
+
+    val dynamicFontSize = remember(activePrimary) {
+        when {
+            activePrimary.length <= 20 -> 24.sp
+            activePrimary.length <= 34 -> 20.sp
+            activePrimary.length <= 52 -> 17.sp
+            else -> 14.5.sp
+        }
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = horizontalAlignment,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        if (lyrics.isEmpty()) {
             Text(
-                text = "暂无歌词 · 将同名 .lrc 放入音频目录即可自动加载",
-                style = MaterialTheme.typography.bodyMedium,
-                color = secondaryColor,
+                text = "纯粹聆听 · 静享此刻",
+                fontSize = 15.sp,
+                color = mutedColor,
+                textAlign = textAlign,
             )
-            return@Box
+            return@Column
         }
 
-        val prevPair = lyrics.getOrNull(activeIdx - 1)?.let { splitBilingualLyric(it) }
-        val curPair = splitBilingualLyric(lyrics[activeIdx])
-        val nextPair = lyrics.getOrNull(activeIdx + 1)?.let { splitBilingualLyric(it) }
-
-        val line1Text = prevPair?.first.orEmpty()
-        val line2Text = curPair.first
-        val hasTranslation = !curPair.second.isNullOrBlank()
-        val line3Text = if (hasTranslation) curPair.second.orEmpty() else nextPair?.first.orEmpty()
-
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.Center,
+        Text(
+            text = line1Text,
+            fontSize = 13.5.sp,
+            color = mutedColor.copy(alpha = 0.72f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = textAlign,
+            modifier = Modifier.fillMaxWidth().height(22.dp),
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Box(
+            modifier = Modifier.fillMaxWidth().height(64.dp),
+            contentAlignment = if (horizontalAlignment == Alignment.Start) Alignment.CenterStart else Alignment.Center,
         ) {
-            Box(modifier = Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.CenterStart) {
-                if (line1Text.isNotBlank()) {
-                    Text(
-                        text = line1Text,
-                        style = TextStyle(fontSize = 14.sp, fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic),
-                        color = mutedColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(84.dp), contentAlignment = Alignment.CenterStart) {
-                val maxWpx = constraints.maxWidth.coerceAtLeast(1)
-                val maxHpx = constraints.maxHeight.coerceAtLeast(1)
-                val fittedSp = remember(line2Text, maxWpx, maxHpx) {
-                    var chosen = 14
-                    for (cand in 28 downTo 13) {
-                        val res = textMeasurer.measure(
-                            text = line2Text,
-                            style = TextStyle(
-                                fontFamily = FontFamily.Serif,
-                                fontSize = cand.sp,
-                                fontWeight = FontWeight.Bold,
-                                lineHeight = (cand * 1.32f).sp,
-                            ),
-                            constraints = Constraints(maxWidth = maxWpx),
-                        )
-                        if (res.size.height <= maxHpx && !res.didOverflowWidth) {
-                            chosen = cand
-                            break
-                        }
-                    }
-                    chosen
-                }
-                Text(
-                    text = line2Text,
-                    style = TextStyle(
-                        fontFamily = FontFamily.Serif,
-                        fontSize = fittedSp.sp,
-                        fontWeight = FontWeight.Bold,
-                        lineHeight = (fittedSp * 1.32f).sp,
-                    ),
-                    color = activeColor,
-                )
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            Box(modifier = Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.TopStart) {
-                if (line3Text.isNotBlank()) {
-                    Text(
-                        text = line3Text,
-                        style = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
-                        color = if (hasTranslation) secondaryColor else mutedColor,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+            Text(
+                text = activePrimary,
+                fontSize = dynamicFontSize,
+                lineHeight = dynamicFontSize * 1.32f,
+                fontWeight = FontWeight.Bold,
+                color = activeColor,
+                textAlign = textAlign,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
+        Spacer(modifier = Modifier.height(5.dp))
+        Text(
+            text = line3Text,
+            fontSize = 14.sp,
+            color = if (!activeSecondary.isNullOrBlank()) secondaryColor.copy(alpha = 0.90f) else mutedColor.copy(alpha = 0.72f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = textAlign,
+            modifier = Modifier.fillMaxWidth().height(22.dp),
+        )
     }
 }
 
 /**
- * 4-Mode 60fps Watchmaker-Refined Live PCM Audio Spectrum & Waveform Scrubber.
+ * Silky 60fps Live 256-Point FFT Audio Spectrum SeekBar (Zero vertical playhead sticks!).
+ * Reads DesktopSpectrumBus.bands.value live every frame via withFrameNanos (zero stale closure).
  */
 @Composable
 fun DesktopLiveSpectrumBar(
-    songId: Long,
+    songId: String,
     positionMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
     spectrumStyle: DesktopSpectrumStyle,
     playedColor: Color,
     unplayedColor: Color,
-    needleColor: Color,
+    accentColor: Color,
     timestampColor: Color,
     onSeekTo: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val barCount = 72
-    val spectrumBands by DesktopSpectrumBus.bands.collectAsState()
-    val beatEnergy by DesktopSpectrumBus.beatEnergy.collectAsState()
+    val barCount = DesktopSpectrumBus.BAND_COUNT
+    val animatedLevels = remember { FloatArray(barCount) { 0.08f } }
+    val peakDots = remember { FloatArray(barCount) { 0.08f } }
+    val peakVel = remember { FloatArray(barCount) { 0f } }
+    var frameTick by remember { mutableLongStateOf(0L) }
+    var phaseTime by remember { mutableFloatStateOf(0f) }
 
     val restingContour = remember(songId) {
-        FloatArray(barCount) { idx ->
-            val t = idx.toFloat() / (barCount - 1)
-            val arch = 0.22f + 0.22f * sin(t * Math.PI).toFloat()
-            val detail = 0.08f * sin(idx * 0.48f + (songId % 9)).toFloat()
-            (arch + detail).coerceIn(0.14f, 0.48f)
+        val seed = songId.hashCode()
+        FloatArray(barCount) { i ->
+            val u = i.toFloat() / (barCount - 1)
+            val env = sin(u * PI).toFloat().coerceAtLeast(0.18f)
+            val wave = 0.5f + 0.5f * sin(i * 0.45f + (seed and 0xFF) * 0.1f)
+            (0.08f + env * wave * 0.24f).coerceIn(0.06f, 0.34f)
         }
     }
 
-    val animatedLevels = remember { FloatArray(barCount) { 0.16f } }
-    val peakHoldLevels = remember { FloatArray(barCount) { 0.16f } }
-    var frameTick by remember { mutableIntStateOf(0) }
-    var wavePhase by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(isPlaying, songId) {
+        var lastNanos = 0L
+        while (true) {
+            withFrameNanos { nanos ->
+                val dt = if (lastNanos == 0L) 0.016f else ((nanos - lastNanos) / 1_000_000_000f).coerceIn(0.004f, 0.05f)
+                lastNanos = nanos
+                if (isPlaying) phaseTime += dt * 3.2f
 
-    LaunchedEffect(isPlaying) {
-        var lastNs = 0L
-        while (isActive) {
-            withFrameNanos { nowNs ->
-                val dt = if (lastNs == 0L) 0.016f else ((nowNs - lastNs) / 1_000_000_000f).coerceIn(0.004f, 0.05f)
-                lastNs = nowNs
-                if (isPlaying) wavePhase += dt * (3.6f + beatEnergy * 3.2f)
+                // Live read from DesktopSpectrumBus every single frame (no stale Compose closure!)
+                val liveBands = DesktopSpectrumBus.bands.value
+                val attackRate = 1f - kotlin.math.exp((-22f * dt).toDouble()).toFloat()
+                val releaseRate = 1f - kotlin.math.exp((-7.5f * dt).toDouble()).toFloat()
 
-                val bandCount = spectrumBands.size.coerceAtLeast(1)
-                var energySum = 0f
-                for (b in spectrumBands) energySum += b
-                val hasLivePcm = energySum > 0.03f
-
-                var changed = false
                 for (i in 0 until barCount) {
-                    val t = i.toFloat() / (barCount - 1)
-                    val ribbonTaper = 0.42f + 0.58f * sin(t * Math.PI).toFloat()
                     val target = if (isPlaying) {
-                        val live = spectrumBands[(i * bandCount) / barCount]
-                        val travelWave = 0.5f + 0.5f * sin(wavePhase - i * 0.20f)
-                        if (hasLivePcm) {
-                            (0.10f + (live * 1.12f + beatEnergy * 0.22f * travelWave) * ribbonTaper * 0.90f).coerceIn(0.10f, 0.98f)
-                        } else {
-                            ((0.28f + 0.52f * travelWave) * ribbonTaper).coerceIn(0.12f, 0.88f)
-                        }
+                        val raw = liveBands.getOrElse(i) { 0f }
+                        val subtleBreath = 0.045f + 0.025f * sin(phaseTime + i * 0.28f)
+                        (raw * 0.94f + subtleBreath).coerceIn(0.04f, 1.0f)
                     } else {
-                        restingContour[i] * 0.58f
+                        restingContour[i] * 0.42f
                     }
                     val cur = animatedLevels[i]
-                    val speed = if (target > cur) 24f else 6.8f
-                    val next = cur + (target - cur) * (dt * speed).coerceAtMost(1f)
-                    if (abs(next - cur) > 0.001f) changed = true
-                    animatedLevels[i] = next
+                    val nextVal = cur + (target - cur) * if (target > cur) attackRate else releaseRate
+                    animatedLevels[i] = nextVal
 
-                    val prevPeak = peakHoldLevels[i]
-                    peakHoldLevels[i] = if (next >= prevPeak) next else (prevPeak - dt * 0.38f).coerceAtLeast(next)
+                    // Physics gravity for DOT_MATRIX peak dots
+                    if (nextVal >= peakDots[i]) {
+                        peakDots[i] = nextVal
+                        peakVel[i] = 0f
+                    } else {
+                        peakVel[i] += 1.45f * dt
+                        peakDots[i] = (peakDots[i] - peakVel[i] * dt).coerceAtLeast(nextVal)
+                    }
                 }
-                if (changed || isPlaying) frameTick++
+                frameTick = nanos
             }
-            if (!isPlaying) delay(16L)
         }
     }
 
     var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
     var widthPx by remember { mutableFloatStateOf(1f) }
-
     val progress = if (isDragging) dragFraction else if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     val displayPosMs = if (isDragging) (dragFraction * durationMs).toLong() else positionMs
 
@@ -480,12 +828,11 @@ fun DesktopLiveSpectrumBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(54.dp)
+                .height(64.dp)
                 .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
                 .pointerInput(durationMs) {
                     detectTapGestures { offset ->
-                        val frac = (offset.x / widthPx).coerceIn(0f, 1f)
-                        onSeekTo((frac * durationMs).toLong())
+                        onSeekTo(((offset.x / widthPx).coerceIn(0f, 1f) * durationMs).toLong())
                     }
                 }
                 .pointerInput(durationMs) {
@@ -506,201 +853,414 @@ fun DesktopLiveSpectrumBar(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(modifier = Modifier.fillMaxWidth().height(48.dp)) {
+            Canvas(modifier = Modifier.fillMaxWidth().height(60.dp)) {
                 val _tick = frameTick
                 val totalW = size.width
                 val totalH = size.height
-                val playheadX = (totalW * progress).coerceIn(2f, totalW - 2f)
+                val playheadX = (totalW * progress).coerceIn(0f, totalW)
 
                 when (spectrumStyle) {
                     DesktopSpectrumStyle.SILK_RIBBON -> {
                         val step = totalW / barCount
-                        val barW = (step * 0.46f).coerceIn(2.2f, 4.2f)
-                        val baseY = totalH - 2f
+                        val barW = (step * 0.44f).coerceIn(2.2f, 5.2f)
+                        val baseY = totalH - 3f
                         val crestPath = Path()
                         var prevX = 0f
                         var prevY = baseY
 
                         for (i in 0 until barCount) {
-                            val cx = i * step + step / 2f
+                            val cx = i * step + step * 0.5f
                             val isPlayed = cx <= playheadX
-                            val rawLevel = animatedLevels[i]
-                            val level = if (isPlayed) rawLevel else (restingContour[i] * 0.28f + rawLevel * 0.62f).coerceIn(0.10f, 0.78f)
-                            val barH = ((totalH - 6f) * level).coerceAtLeast(4f)
+                            val lvl = animatedLevels[i]
+                            val barH = ((totalH - 8f) * lvl).coerceAtLeast(3.5f)
                             val topY = baseY - barH
+                            val col = if (isPlayed) playedColor else unplayedColor
 
                             drawRoundRect(
                                 brush = Brush.verticalGradient(
-                                    0.0f to (if (isPlayed) playedColor else unplayedColor),
-                                    0.72f to (if (isPlayed) playedColor.copy(alpha = 0.72f) else unplayedColor.copy(alpha = 0.55f)),
+                                    0.0f to col,
+                                    0.72f to col.copy(alpha = if (isPlayed) 0.65f else 0.35f),
                                     1.0f to Color.Transparent,
                                     startY = topY,
                                     endY = baseY,
                                 ),
-                                topLeft = Offset(cx - barW / 2f, topY),
+                                topLeft = Offset(cx - barW * 0.5f, topY),
                                 size = Size(barW, barH),
-                                cornerRadius = CornerRadius(barW / 2f, barW / 2f),
+                                cornerRadius = CornerRadius(barW * 0.5f, barW * 0.5f),
                             )
 
                             val crestY = (topY - 2f).coerceAtLeast(2f)
-                            if (i == 0) crestPath.moveTo(cx, crestY) else crestPath.quadraticTo(prevX, prevY, (prevX + cx) / 2f, (prevY + crestY) / 2f)
+                            if (i == 0) crestPath.moveTo(cx, crestY)
+                            else crestPath.quadraticTo(prevX, prevY, (prevX + cx) * 0.5f, (prevY + crestY) * 0.5f)
                             prevX = cx; prevY = crestY
                         }
                         crestPath.lineTo(prevX, prevY)
 
                         clipRect(0f, 0f, playheadX, totalH) {
-                            drawPath(crestPath, color = playedColor.copy(alpha = 0.22f), style = Stroke(width = 5.5f, cap = StrokeCap.Round))
-                            drawPath(crestPath, color = playedColor.copy(alpha = 0.90f), style = Stroke(width = 2.0f, cap = StrokeCap.Round))
+                            drawPath(crestPath, color = playedColor.copy(alpha = 0.22f), style = Stroke(width = 6f, cap = StrokeCap.Round))
+                            drawPath(crestPath, color = playedColor.copy(alpha = 0.92f), style = Stroke(width = 1.9f, cap = StrokeCap.Round))
                         }
                         clipRect(playheadX, 0f, totalW, totalH) {
-                            drawPath(crestPath, color = unplayedColor.copy(alpha = 0.80f), style = Stroke(width = 1.6f, cap = StrokeCap.Round))
+                            drawPath(crestPath, color = unplayedColor.copy(alpha = 0.72f), style = Stroke(width = 1.4f, cap = StrokeCap.Round))
                         }
-                        drawLine(needleColor.copy(alpha = 0.28f + beatEnergy * 0.22f), Offset(playheadX, 3f), Offset(playheadX, baseY), strokeWidth = 6f, cap = StrokeCap.Round)
-                        drawLine(needleColor, Offset(playheadX, 3f), Offset(playheadX, baseY), strokeWidth = 2.2f, cap = StrokeCap.Round)
-                        drawCircle(needleColor, radius = 2.8f, center = Offset(playheadX, 3.5f))
                     }
 
                     DesktopSpectrumStyle.HARMONIC_STRINGS -> {
-                        val midY = totalH / 2f
-                        val pts = 88
-                        drawLine(unplayedColor.copy(alpha = 0.35f), Offset(0f, midY), Offset(totalW, midY), strokeWidth = 0.8f)
-
-                        val amps = listOf(
-                            (0.22f + animatedLevels[barCount / 2] * 0.78f) * totalH * 0.42f,
-                            (0.18f + animatedLevels[barCount / 3] * 0.62f) * totalH * 0.42f,
-                            (0.14f + animatedLevels[(barCount * 3) / 4] * 0.46f) * totalH * 0.42f,
-                        )
-                        val colors = listOf(playedColor, Color(0xFFD8B888), needleColor.copy(alpha = 0.85f))
-                        val strokes = listOf(2.2f, 1.5f, 1.2f)
-                        val freqs = listOf(2.4f, 3.2f, 4.1f)
-                        var primaryY = midY
-
-                        for (sIdx in 0..2) {
+                        val midY = totalH * 0.52f
+                        val step = totalW / (barCount - 1)
+                        for (layer in 0..2) {
+                            val ampScale = when (layer) {
+                                0 -> 0.44f
+                                1 -> 0.30f
+                                else -> 0.19f
+                            }
+                            val phaseShift = layer * 1.45f
                             val path = Path()
-                            val amp = if (isPlaying) amps[sIdx] else totalH * 0.42f * (0.16f - sIdx * 0.04f)
-                            for (p in 0..pts) {
-                                val t = p.toFloat() / pts
-                                val x = t * totalW
-                                val y = midY + sin(t * freqs[sIdx] * Math.PI.toFloat() * 2f + wavePhase * (1f + sIdx * 0.25f) + sIdx * 1.3f) * amp * sin(t * Math.PI).toFloat()
-                                if (p == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                                if (sIdx == 0 && abs(x - playheadX) <= totalW / pts) primaryY = y
+                            var px = 0f
+                            var py = midY
+                            for (i in 0 until barCount) {
+                                val x = i * step
+                                val u = i.toFloat() / (barCount - 1)
+                                val edgeTap = sin(u * PI).toFloat().coerceAtLeast(0.08f)
+                                val osc = sin(phaseTime * (1.1f + layer * 0.25f) + i * 0.32f + phaseShift)
+                                val y = midY + osc * animatedLevels[i] * totalH * ampScale * edgeTap
+                                if (i == 0) path.moveTo(x, y)
+                                else path.quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
+                                px = x; py = y
+                            }
+                            path.lineTo(px, py)
+                            val strokeW = when (layer) {
+                                0 -> 2.4f
+                                1 -> 1.6f
+                                else -> 1.1f
+                            }
+                            val alphaPlayed = when (layer) {
+                                0 -> 0.94f
+                                1 -> 0.56f
+                                else -> 0.32f
                             }
                             clipRect(0f, 0f, playheadX, totalH) {
-                                drawPath(path, color = colors[sIdx].copy(alpha = if (sIdx == 0) 0.95f else 0.72f), style = Stroke(width = strokes[sIdx], cap = StrokeCap.Round))
+                                if (layer == 0) {
+                                    drawPath(path, color = playedColor.copy(alpha = 0.20f), style = Stroke(7f, cap = StrokeCap.Round))
+                                }
+                                drawPath(path, color = playedColor.copy(alpha = alphaPlayed), style = Stroke(strokeW, cap = StrokeCap.Round))
                             }
                             clipRect(playheadX, 0f, totalW, totalH) {
-                                drawPath(path, color = colors[sIdx].copy(alpha = 0.25f), style = Stroke(width = strokes[sIdx] * 0.85f, cap = StrokeCap.Round))
+                                drawPath(path, color = unplayedColor.copy(alpha = alphaPlayed * 0.72f), style = Stroke(strokeW * 0.85f, cap = StrokeCap.Round))
                             }
                         }
-                        drawLine(playedColor.copy(alpha = 0.45f), Offset(playheadX, 2f), Offset(playheadX, totalH - 2f), strokeWidth = 1.2f)
-                        drawCircle(playedColor.copy(alpha = 0.28f), radius = 7.5f, center = Offset(playheadX, primaryY))
-                        drawCircle(playedColor, radius = 3.4f, center = Offset(playheadX, primaryY))
                     }
 
                     DesktopSpectrumStyle.DOT_MATRIX -> {
-                        val cols = 48
+                        val step = totalW / barCount
                         val rows = 8
-                        val colStep = totalW / cols
-                        val matrixBottom = totalH - 7f
-                        val rowStep = (matrixBottom - 3f) / rows
-                        val dotR = (minOf(colStep, rowStep) * 0.30f).coerceIn(1.5f, 3.0f)
+                        val rowH = (totalH - 6f) / rows
+                        val dotR = (minOf(step, rowH) * 0.30f).coerceIn(1.5f, 2.8f)
+                        val baseY = totalH - 3f
 
-                        for (c in 0 until cols) {
-                            val cx = c * colStep + colStep / 2f
+                        for (i in 0 until barCount) {
+                            val cx = i * step + step * 0.5f
                             val isPlayed = cx <= playheadX
-                            val mIdx = (c * barCount) / cols
-                            val level = if (isPlayed) animatedLevels[mIdx] else (restingContour[mIdx] * 0.25f + animatedLevels[mIdx] * 0.55f).coerceIn(0.08f, 0.75f)
-                            val litRows = (level * rows).roundToInt().coerceIn(1, rows)
-                            val peakRow = (peakHoldLevels[mIdx] * rows).roundToInt().coerceIn(litRows, rows)
+                            val activeRows = (animatedLevels[i] * rows).roundToInt().coerceIn(1, rows)
+                            val col = if (isPlayed) playedColor else unplayedColor
 
-                            for (r in 0 until rows) {
-                                val cy = matrixBottom - r * rowStep - rowStep / 2f
-                                val fade = 0.58f + (r.toFloat() / rows) * 0.42f
-                                val col = when {
-                                    r < litRows && isPlayed -> playedColor.copy(alpha = fade)
-                                    r < litRows -> unplayedColor.copy(alpha = fade * 0.85f)
-                                    else -> unplayedColor.copy(alpha = 0.14f)
-                                }
-                                drawCircle(col, radius = dotR, center = Offset(cx, cy))
+                            for (r in 0 until activeRows) {
+                                val cy = baseY - r * rowH - rowH * 0.5f
+                                val fade = 0.45f + 0.55f * (r.toFloat() / rows)
+                                drawCircle(col.copy(alpha = fade), radius = dotR, center = Offset(cx, cy))
                             }
-                            if (isPlayed && peakRow in 1..rows) {
-                                val py = matrixBottom - (peakRow - 1) * rowStep - rowStep / 2f
-                                drawCircle(needleColor.copy(alpha = 0.30f), radius = dotR * 2f, center = Offset(cx, py))
-                                drawCircle(needleColor, radius = dotR * 1.05f, center = Offset(cx, py))
-                            }
+                            // Physics gravity falling peak dot
+                            val peakRow = (peakDots[i] * (rows - 1)).coerceIn(0f, (rows - 1).toFloat())
+                            val peakY = baseY - peakRow * rowH - rowH * 0.5f
+                            drawCircle(
+                                color = if (isPlayed) accentColor else unplayedColor.copy(alpha = 0.85f),
+                                radius = dotR * 1.18f,
+                                center = Offset(cx, peakY),
+                            )
                         }
-                        for (tIdx in 0..50) {
-                            val tx = (tIdx / 50f) * totalW
-                            val h = if (tIdx % 5 == 0) 4.5f else 2.2f
-                            drawLine(unplayedColor.copy(alpha = 0.45f), Offset(tx, totalH - h), Offset(tx, totalH), strokeWidth = 0.9f)
-                        }
-                        drawLine(playedColor.copy(alpha = 0.45f), Offset(playheadX, 2f), Offset(playheadX, matrixBottom), strokeWidth = 1.4f)
                     }
 
                     DesktopSpectrumStyle.INK_MOUNTAIN -> {
-                        val step = totalW / (barCount - 1)
                         val baseY = totalH - 2f
-                        val frontRidge = Path()
-                        val frontFill = Path()
-                        val backRidge = Path()
-                        val backFill = Path()
-                        var pFx = 0f; var pFy = baseY; var pBx = 0f; var pBy = baseY
-                        var ridgeAtHead = baseY * 0.5f
-
-                        for (i in 0 until barCount) {
-                            val cx = i * step
-                            val fy = (baseY - (totalH - 8f) * animatedLevels[i]).coerceIn(4f, baseY - 3f)
-                            val bLvl = (animatedLevels[(i + 9) % barCount] * 0.72f + restingContour[i] * 0.25f).coerceIn(0.12f, 0.86f)
-                            val by = (baseY - (totalH - 10f) * bLvl).coerceIn(6f, baseY - 4f)
-                            if (abs(cx - playheadX) <= step) ridgeAtHead = fy
-
-                            if (i == 0) {
-                                frontRidge.moveTo(cx, fy); frontFill.moveTo(cx, baseY); frontFill.lineTo(cx, fy)
-                                backRidge.moveTo(cx, by); backFill.moveTo(cx, baseY); backFill.lineTo(cx, by)
-                            } else {
-                                val mx = (pFx + cx) / 2f
-                                frontRidge.quadraticTo(pFx, pFy, mx, (pFy + fy) / 2f)
-                                frontFill.quadraticTo(pFx, pFy, mx, (pFy + fy) / 2f)
-                                backRidge.quadraticTo(pBx, pBy, mx, (pBy + by) / 2f)
-                                backFill.quadraticTo(pBx, pBy, mx, (pBy + by) / 2f)
+                        val step = totalW / (barCount - 1)
+                        // Distant secondary ink mountain
+                        val backPath = Path().apply {
+                            moveTo(0f, baseY)
+                            var px = 0f
+                            var py = baseY
+                            for (i in 0 until barCount) {
+                                val x = i * step
+                                val shifted = animatedLevels[(i + 4) % barCount]
+                                val y = baseY - (totalH - 10f) * (shifted * 0.72f + 0.08f)
+                                if (i == 0) lineTo(x, y) else quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
+                                px = x; py = y
                             }
-                            pFx = cx; pFy = fy; pBx = cx; pBy = by
-                        }
-                        frontRidge.lineTo(pFx, pFy); frontFill.lineTo(pFx, pFy); frontFill.lineTo(totalW, baseY); frontFill.close()
-                        backRidge.lineTo(pBx, pBy); backFill.lineTo(pBx, pBy); backFill.lineTo(totalW, baseY); backFill.close()
-
-                        drawPath(backFill, brush = Brush.verticalGradient(0f to unplayedColor.copy(alpha = 0.24f), 1f to Color.Transparent, startY = 4f, endY = baseY))
-                        drawPath(backRidge, color = unplayedColor.copy(alpha = 0.35f), style = Stroke(width = 1.1f))
-
-                        clipRect(0f, 0f, playheadX, totalH) {
-                            drawPath(frontFill, brush = Brush.verticalGradient(0f to playedColor.copy(alpha = 0.56f), 0.78f to playedColor.copy(alpha = 0.14f), 1f to Color.Transparent, startY = 2f, endY = baseY))
-                            drawPath(frontRidge, color = playedColor.copy(alpha = 0.92f), style = Stroke(width = 2.0f, cap = StrokeCap.Round))
-                        }
-                        clipRect(playheadX, 0f, totalW, totalH) {
-                            drawPath(frontRidge, color = unplayedColor.copy(alpha = 0.72f), style = Stroke(width = 1.3f, cap = StrokeCap.Round))
-                        }
-
-                        val d = if (isDragging) 6.5f else 5.0f
-                        val diamond = Path().apply {
-                            moveTo(playheadX, ridgeAtHead - d)
-                            lineTo(playheadX + d, ridgeAtHead)
-                            lineTo(playheadX, ridgeAtHead + d)
-                            lineTo(playheadX - d, ridgeAtHead)
+                            lineTo(totalW, baseY)
                             close()
                         }
-                        drawCircle(needleColor.copy(alpha = 0.30f), radius = d * 1.9f, center = Offset(playheadX, ridgeAtHead))
-                        drawPath(diamond, color = needleColor)
+                        drawPath(
+                            path = backPath,
+                            brush = Brush.verticalGradient(
+                                0.0f to unplayedColor.copy(alpha = 0.36f),
+                                1.0f to Color.Transparent,
+                            ),
+                        )
+
+                        // Foreground main ink mountain
+                        val frontPath = Path().apply {
+                            moveTo(0f, baseY)
+                            var px = 0f
+                            var py = baseY
+                            for (i in 0 until barCount) {
+                                val x = i * step
+                                val y = baseY - (totalH - 6f) * (animatedLevels[i] * 0.94f + 0.05f)
+                                if (i == 0) lineTo(x, y) else quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
+                                px = x; py = y
+                            }
+                            lineTo(totalW, baseY)
+                            close()
+                        }
+                        clipRect(0f, 0f, playheadX, totalH) {
+                            drawPath(
+                                path = frontPath,
+                                brush = Brush.verticalGradient(
+                                    0.0f to playedColor.copy(alpha = 0.72f),
+                                    0.85f to playedColor.copy(alpha = 0.16f),
+                                    1.0f to Color.Transparent,
+                                ),
+                            )
+                        }
+                        clipRect(playheadX, 0f, totalW, totalH) {
+                            drawPath(
+                                path = frontPath,
+                                brush = Brush.verticalGradient(
+                                    0.0f to unplayedColor.copy(alpha = 0.45f),
+                                    1.0f to Color.Transparent,
+                                ),
+                            )
+                        }
                     }
                 }
             }
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(formatDuration(displayPosMs), style = TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace), color = timestampColor)
-            Text(formatDuration(durationMs), style = TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace), color = timestampColor)
+            Text(text = formatDuration(displayPosMs), fontSize = 11.sp, color = timestampColor)
+            Text(text = formatDuration(durationMs), fontSize = 11.sp, color = timestampColor)
+        }
+    }
+}
+
+/**
+ * Compact 248dp Top-Right 2x2 Floating Control Menu (1:1 port of Android v2.0 ImmersiveControlSheet).
+ * Keeps bottom lyrics and 60fps spectrum 100% unobstructed while live-previewing!
+ */
+@Composable
+fun DesktopImmersiveControlMenu(
+    expanded: Boolean,
+    isDarkSurface: Boolean,
+    currentScene: DesktopSceneStyle,
+    currentSpectrum: DesktopSpectrumStyle,
+    lyricOffsetMs: Long,
+    accentColor: Color,
+    onDismiss: () -> Unit,
+    onSelectScene: (DesktopSceneStyle) -> Unit,
+    onSelectSpectrum: (DesktopSpectrumStyle) -> Unit,
+    onAdjustLyricOffset: (Long) -> Unit,
+    onResetLyricOffset: () -> Unit,
+) {
+    val menuBg = if (isDarkSurface) Color(0xF21A1918) else Color(0xF5FBF9F4)
+    val borderColor = if (isDarkSurface) Color.White.copy(alpha = 0.14f) else Color(0xFFDDD6C8)
+    val ink = if (isDarkSurface) Color(0xFFF2ECE1) else Color(0xFF1E1B18)
+    val muted = if (isDarkSurface) Color(0xFF9C948A) else Color(0xFF6B655D)
+    val activeAccent = if (isDarkSurface) Color(0xFFE0C08E) else accentColor
+    val pillBg = if (isDarkSurface) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.045f)
+
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = Modifier
+            .width(248.dp)
+            .background(menuBg, RoundedCornerShape(16.dp))
+            .border(0.75.dp, borderColor, RoundedCornerShape(16.dp)),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("沉浸场景", fontSize = 11.sp, color = muted, fontWeight = FontWeight.Medium)
+                DesktopSceneStyle.entries.chunked(2).forEach { rowItems ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        rowItems.forEach { st ->
+                            val selected = st == currentScene
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (selected) activeAccent.copy(alpha = 0.18f) else pillBg)
+                                    .border(
+                                        0.75.dp,
+                                        if (selected) activeAccent else Color.Transparent,
+                                        RoundedCornerShape(10.dp),
+                                    )
+                                    .clickable { onSelectScene(st) }
+                                    .padding(vertical = 7.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = st.label,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) activeAccent else ink,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(thickness = 0.6.dp, color = borderColor)
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("实时频谱", fontSize = 11.sp, color = muted, fontWeight = FontWeight.Medium)
+                DesktopSpectrumStyle.entries.chunked(2).forEach { rowItems ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        rowItems.forEach { sp ->
+                            val selected = sp == currentSpectrum
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (selected) activeAccent.copy(alpha = 0.18f) else pillBg)
+                                    .border(
+                                        0.75.dp,
+                                        if (selected) activeAccent else Color.Transparent,
+                                        RoundedCornerShape(10.dp),
+                                    )
+                                    .clickable { onSelectSpectrum(sp) }
+                                    .padding(vertical = 7.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = sp.label,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) activeAccent else ink,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(thickness = 0.6.dp, color = borderColor)
+
+            // Lyric Time Offset Micro-Adjuster
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "歌词微调 ${if (lyricOffsetMs >= 0) "+" else ""}${String.format("%.1fs", lyricOffsetMs / 1000f)}",
+                    fontSize = 11.sp,
+                    color = muted,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("-0.5s" to -500L, "归零" to 0L, "+0.5s" to 500L).forEach { (lbl, delta) ->
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(pillBg)
+                                .clickable {
+                                    if (delta == 0L) onResetLyricOffset() else onAdjustLyricOffset(delta)
+                                }
+                                .padding(horizontal = 7.dp, vertical = 4.dp),
+                        ) {
+                            Text(lbl, fontSize = 11.sp, color = ink)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Quiet-luxury Cinnabar Archival Sleeve Cold-Start Splash Overlay (matches Android v2.0).
+ */
+@Composable
+fun DesktopSplashOverlay(
+    visible: Boolean,
+    darkMode: Boolean,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(100)),
+        exit = fadeOut(tween(420)),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        val bg = if (darkMode) Color(0xFF141312) else Color(0xFFF5F0E6)
+        val ink = if (darkMode) Color(0xFFF2ECE1) else Color(0xFF1E1B18)
+        val muted = if (darkMode) Color(0xFF9C9388) else Color(0xFF8C7E6D)
+        Box(
+            modifier = Modifier.fillMaxSize().background(bg),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(modifier = Modifier.size(116.dp), contentAlignment = Alignment.BottomCenter) {
+                    // Rising glossy black vinyl disc
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .size(84.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF0E0E10))
+                            .border(1.dp, Color.White.copy(alpha = 0.14f), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFA9321E)),
+                        )
+                    }
+                    // Cinnabar archival sleeve
+                    Box(
+                        modifier = Modifier
+                            .size(88.dp)
+                            .shadow(14.dp, RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFA9321E)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .border(2.2.dp, Color(0xFFF4E8D4), CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFF4E8D4)),
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(18.dp))
+                Text("简约音乐", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = ink, letterSpacing = 2.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("PURE MUSIC · HI-RES AUDIO", fontSize = 10.sp, color = muted, letterSpacing = 2.4.sp)
+            }
         }
     }
 }

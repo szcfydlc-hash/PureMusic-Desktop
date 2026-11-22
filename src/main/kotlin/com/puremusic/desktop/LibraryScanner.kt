@@ -1,213 +1,308 @@
 package com.puremusic.desktop
 
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.FieldKey
-import org.jetbrains.skia.Image as SkiaImage
 import java.io.File
 import java.nio.charset.Charset
-import java.util.Properties
+import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.logging.Level
 import java.util.logging.Logger
 
-object LibraryScanner {
+object DesktopLibraryScanner {
     private val supportedExtensions = setOf("mp3", "flac", "wav", "aiff", "aif")
-    private val lrcTimestampRegex = Regex("""\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?]""")
 
     init {
-        // Silence noisy JAudiotagger console logging
-        runCatching {
-            Logger.getLogger("org.jaudiotagger").level = Level.OFF
-        }
+        Logger.getLogger("org.jaudiotagger").level = Level.OFF
     }
 
-    fun scanFolders(folders: List<String>): List<DesktopSong> {
-        val results = mutableListOf<DesktopSong>()
-        var nextId = 1L
+    fun scanFolders(folderPaths: List<String>): List<DesktopSong> {
+        val result = mutableListOf<DesktopSong>()
         val seenPaths = HashSet<String>()
 
-        for (dirPath in folders) {
-            val dir = File(dirPath)
-            if (!dir.exists() || !dir.isDirectory) continue
-            dir.walkTopDown()
-                .filter { it.isFile && it.extension.lowercase() in supportedExtensions }
+        folderPaths.forEach { dirPath ->
+            val root = File(dirPath)
+            if (!root.exists() || !root.isDirectory) return@forEach
+            root.walkTopDown()
+                .onFail { _, _ -> }
+                .filter { it.isFile && it.extension.lowercase(Locale.US) in supportedExtensions }
                 .forEach { file ->
-                    val canonical = file.absolutePath
+                    val canonical = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
                     if (!seenPaths.add(canonical)) return@forEach
-                    val song = readSongMetadata(nextId++, file)
-                    results.add(song)
+                    result.add(readSongMetadata(file, canonical))
                 }
         }
-        return results.sortedBy { it.title.lowercase() }
+
+        return result.sortedWith(
+            compareBy<DesktopSong> { it.title.lowercase(Locale.getDefault()) }
+                .thenBy { it.artist.lowercase(Locale.getDefault()) },
+        )
     }
 
-    private fun readSongMetadata(id: Long, file: File): DesktopSong {
+    private fun readSongMetadata(file: File, canonicalPath: String): DesktopSong {
+        val ext = file.extension.uppercase(Locale.US)
         var title = file.nameWithoutExtension
         var artist = "未知歌手"
-        var album = file.parentFile?.name ?: "本地曲库"
-        var durationMs = 0L
-        var embeddedLyrics: String? = null
-        val formatBadge = file.extension.uppercase()
+        var album = "未知专辑"
+        var durationMs = 210_000L
+        var sampleRateHz = 44100
+        var bitRateKbps = 0
+        var bitsPerSample = 16
 
         runCatching {
             val audioFile = AudioFileIO.read(file)
-            durationMs = (audioFile.audioHeader?.trackLength ?: 0) * 1000L
+            val header = audioFile.audioHeader
+            if (header != null) {
+                if (header.trackLength > 0) durationMs = header.trackLength * 1000L
+                val sr = header.sampleRateAsNumber
+                if (sr > 0) sampleRateHz = sr
+                val br = header.bitRateAsNumber.toInt()
+                if (br > 0) bitRateKbps = br
+                val bps = header.bitsPerSample
+                if (bps > 0) bitsPerSample = bps
+            }
             val tag = audioFile.tag
             if (tag != null) {
-                tag.getFirst(FieldKey.TITLE)?.trim()?.takeIf { it.isNotBlank() }?.let { title = it }
-                tag.getFirst(FieldKey.ARTIST)?.trim()?.takeIf { it.isNotBlank() }?.let { artist = it }
-                tag.getFirst(FieldKey.ALBUM)?.trim()?.takeIf { it.isNotBlank() }?.let { album = it }
-                tag.getFirst(FieldKey.LYRICS)?.trim()?.takeIf { it.isNotBlank() }?.let { embeddedLyrics = it }
+                tag.getFirst(FieldKey.TITLE)?.trim()?.takeIf { it.isNotEmpty() }?.let { title = it }
+                tag.getFirst(FieldKey.ARTIST)?.trim()?.takeIf { it.isNotEmpty() }?.let { artist = it }
+                tag.getFirst(FieldKey.ALBUM)?.trim()?.takeIf { it.isNotEmpty() }?.let { album = it }
             }
         }
 
         return DesktopSong(
-            id = id,
-            path = file.absolutePath,
+            id = canonicalPath,
+            filePath = canonicalPath,
             title = title,
             artist = artist,
             album = album,
-            folderName = file.parentFile?.name ?: "根目录",
-            durationMs = durationMs.coerceAtLeast(1_000L),
-            formatBadge = formatBadge,
-            embeddedLyrics = embeddedLyrics,
+            durationMs = durationMs,
+            formatLabel = if (ext == "AIF") "AIFF" else ext,
+            sampleRateHz = sampleRateHz,
+            bitRateKbps = bitRateKbps,
+            bitsPerSample = bitsPerSample,
+            folderName = file.parentFile?.name ?: "本地音乐",
         )
     }
 
-    fun loadArtwork(songPath: String): ImageBitmap? {
-        if (ArtworkCache.contains(songPath)) return ArtworkCache.get(songPath)
-        val bmp = runCatching {
-            val file = File(songPath)
+    fun loadArtwork(filePath: String): ByteArray? {
+        return runCatching {
+            val file = File(filePath)
+            if (!file.exists()) return null
             val audioFile = AudioFileIO.read(file)
-            val bytes = audioFile.tag?.firstArtwork?.binaryData
-            if (bytes != null && bytes.isNotEmpty()) {
-                SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap()
-            } else {
-                // Fallback to cover.jpg / folder.jpg in the same directory
-                val folderCover = file.parentFile?.listFiles()?.firstOrNull { f ->
-                    val n = f.name.lowercase()
-                    n == "cover.jpg" || n == "cover.png" || n == "folder.jpg" || n == "folder.png"
-                }
-                folderCover?.readBytes()?.let { SkiaImage.makeFromEncoded(it).toComposeImageBitmap() }
+            val embedded = audioFile.tag?.firstArtwork?.binaryData
+            if (embedded != null && embedded.isNotEmpty()) return embedded
+
+            val dir = file.parentFile ?: return null
+            val candidates = listOf("cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg")
+            for (name in candidates) {
+                val f = File(dir, name)
+                if (f.exists() && f.length() in 1024L..10_000_000L) return f.readBytes()
             }
+            null
         }.getOrNull()
-        ArtworkCache.put(songPath, bmp)
-        return bmp
     }
 
     fun loadLyricsForSong(song: DesktopSong): List<LyricLine> {
-        // 1. Check sidecar .lrc file next to audio file
-        val audioFile = File(song.path)
+        val audioFile = File(song.filePath)
         val lrcFile = File(audioFile.parentFile, "${audioFile.nameWithoutExtension}.lrc")
-        val rawText = when {
-            lrcFile.exists() && lrcFile.isFile -> readTextAutoCharset(lrcFile)
-            !song.embeddedLyrics.isNullOrBlank() -> song.embeddedLyrics
-            else -> null
-        } ?: return emptyList()
-
-        return parseLrc(rawText)
+        if (lrcFile.exists() && lrcFile.length() in 4L..512_000L) {
+            val rawText = readTextAutoCharset(lrcFile)
+            val parsed = parseLrc(rawText)
+            if (parsed.isNotEmpty()) return parsed
+        }
+        val embeddedText = runCatching {
+            AudioFileIO.read(audioFile).tag?.getFirst(FieldKey.LYRICS)?.trim()
+        }.getOrNull()
+        if (!embeddedText.isNullOrBlank()) {
+            val parsed = parseLrc(embeddedText)
+            if (parsed.isNotEmpty()) return parsed
+            val plain = embeddedText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            if (plain.isNotEmpty()) {
+                val stepMs = (song.durationMs / plain.size.coerceAtLeast(1)).coerceAtLeast(2500L)
+                return plain.mapIndexed { idx, line ->
+                    val (p, s) = splitBilingualLyric(line)
+                    LyricLine(idx * stepMs, p, s)
+                }
+            }
+        }
+        return emptyList()
     }
 
     private fun readTextAutoCharset(file: File): String {
         val bytes = file.readBytes()
-        val utf8 = bytes.toString(Charsets.UTF_8)
-        return if (utf8.contains('\uFFFD')) {
-            runCatching { bytes.toString(Charset.forName("GBK")) }.getOrDefault(utf8)
-        } else {
-            utf8
+        if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
+            return String(bytes, 3, bytes.size - 3, StandardCharsets.UTF_8)
         }
+        val utf8 = String(bytes, StandardCharsets.UTF_8)
+        return if (!utf8.contains('\uFFFD')) utf8 else runCatching { String(bytes, Charset.forName("GB18030")) }.getOrDefault(utf8)
     }
 
-    private fun parseLrc(raw: String): List<LyricLine> {
-        val byTime = LinkedHashMap<Long, MutableList<String>>()
-        for (line in raw.lines()) {
-            val matches = lrcTimestampRegex.findAll(line).toList()
-            if (matches.isEmpty()) continue
-            val text = line.replace(lrcTimestampRegex, "").trim()
-            if (text.isBlank()) continue
-            for (m in matches) {
+    private val timeRegex = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?]""")
+
+    fun parseLrc(raw: String): List<LyricLine> {
+        val grouped = linkedMapOf<Long, MutableList<String>>()
+        raw.lines().forEach { line ->
+            val matches = timeRegex.findAll(line).toList()
+            if (matches.isEmpty()) return@forEach
+            val text = line.replace(timeRegex, "").trim()
+            if (text.isEmpty()) return@forEach
+            matches.forEach { m ->
                 val min = m.groupValues[1].toLongOrNull() ?: 0L
                 val sec = m.groupValues[2].toLongOrNull() ?: 0L
                 val fracRaw = m.groupValues[3]
                 val ms = when (fracRaw.length) {
                     1 -> (fracRaw.toLongOrNull() ?: 0L) * 100L
                     2 -> (fracRaw.toLongOrNull() ?: 0L) * 10L
-                    3 -> (fracRaw.toLongOrNull() ?: 0L)
+                    3 -> fracRaw.toLongOrNull() ?: 0L
                     else -> 0L
                 }
-                val timeMs = min * 60_000L + sec * 1_000L + ms
-                byTime.getOrPut(timeMs) { mutableListOf() }.add(text)
+                val totalMs = min * 60_000L + sec * 1000L + ms
+                grouped.getOrPut(totalMs) { mutableListOf() }.add(text)
             }
         }
-        return byTime.entries
-            .sortedBy { it.key }
-            .map { (timeMs, texts) ->
-                LyricLine(
-                    timeMs = timeMs,
-                    primaryText = texts.first(),
-                    secondaryText = texts.getOrNull(1),
-                )
+        return grouped.entries.sortedBy { it.key }.map { (timeMs, texts) ->
+            if (texts.size >= 2) {
+                LyricLine(timeMs, texts[0], texts[1])
+            } else {
+                val (p, s) = splitBilingualLyric(texts[0])
+                LyricLine(timeMs, p, s)
             }
+        }
     }
 }
 
+/**
+ * Lightweight zero-dependency local config & stats persistence under ~/.puremusic/config_v2.txt
+ */
 object DesktopConfigStore {
-    private val configDir: File
+    private val configFile: File
         get() {
-            val appData = System.getenv("APPDATA")
-            val base = if (!appData.isNullOrBlank()) File(appData, "PureMusic") else File(System.getProperty("user.home"), ".puremusic")
-            if (!base.exists()) base.mkdirs()
-            return base
+            val dir = File(System.getProperty("user.home"), ".puremusic")
+            if (!dir.exists()) dir.mkdirs()
+            return File(dir, "config_v2.txt")
         }
 
-    private val configFile: File get() = File(configDir, "config.properties")
+    fun load(): DesktopConfig {
+        val f = configFile
+        if (!f.exists()) return DesktopConfig()
+        var folders = emptyList<String>()
+        var darkMode = false
+        var accent = DesktopAccentColor.CINNABAR
+        var density = DesktopLayoutDensity.STANDARD
+        var fontScale = 1.0f
+        var scene = DesktopSceneStyle.SPATIAL_GALLERY
+        var spectrum = DesktopSpectrumStyle.SILK_RIBBON
+        var favs = emptySet<String>()
+        var recents = emptyList<String>()
+        val playCounts = mutableMapOf<String, Int>()
+        val hourlyPlays = mutableMapOf<Int, Int>()
+        val playlists = mutableListOf<DesktopPlaylist>()
+        var eqEnabled = false
+        var eqBands = listOf(0f, 0f, 0f, 0f, 0f)
+        val lyricOffsets = mutableMapOf<String, Long>()
 
-    data class SavedConfig(
-        val folders: List<String> = emptyList(),
-        val favoritePaths: Set<String> = emptySet(),
-        val isDarkTheme: Boolean = true,
-        val sceneStyle: DesktopSceneStyle = DesktopSceneStyle.VINYL_STUDY,
-        val spectrumStyle: DesktopSpectrumStyle = DesktopSpectrumStyle.SILK_RIBBON,
-        val volume: Float = 0.85f,
-    )
-
-    fun load(): SavedConfig {
-        if (!configFile.exists()) {
-            val defaultMusic = File(System.getProperty("user.home"), "Music")
-            return SavedConfig(
-                folders = if (defaultMusic.exists() && defaultMusic.isDirectory) listOf(defaultMusic.absolutePath) else emptyList(),
-            )
+        runCatching {
+            f.readLines(StandardCharsets.UTF_8).forEach { line ->
+                val idx = line.indexOf('=')
+                if (idx <= 0) return@forEach
+                val k = line.substring(0, idx)
+                val v = line.substring(idx + 1)
+                when (k) {
+                    "folders" -> folders = v.split('|').filter { it.isNotBlank() }
+                    "darkMode" -> darkMode = v.toBoolean()
+                    "accent" -> accent = DesktopAccentColor.entries.firstOrNull { it.name == v } ?: DesktopAccentColor.CINNABAR
+                    "density" -> density = DesktopLayoutDensity.entries.firstOrNull { it.name == v } ?: DesktopLayoutDensity.STANDARD
+                    "fontScale" -> fontScale = (v.toFloatOrNull() ?: 1.0f).coerceIn(0.85f, 1.25f)
+                    "scene" -> scene = DesktopSceneStyle.entries.firstOrNull { it.name == v } ?: DesktopSceneStyle.SPATIAL_GALLERY
+                    "spectrum" -> spectrum = DesktopSpectrumStyle.entries.firstOrNull { it.name == v } ?: DesktopSpectrumStyle.SILK_RIBBON
+                    "favorites" -> favs = v.split('|').filter { it.isNotBlank() }.toSet()
+                    "recents" -> recents = v.split('|').filter { it.isNotBlank() }
+                    "eqEnabled" -> eqEnabled = v.toBoolean()
+                    "eqBands" -> {
+                        val parsed = v.split(',').mapNotNull { it.toFloatOrNull() }
+                        if (parsed.size == 5) eqBands = parsed
+                    }
+                    "playCount" -> {
+                        val sep = v.lastIndexOf("::")
+                        if (sep > 0) {
+                            val path = v.substring(0, sep)
+                            val cnt = v.substring(sep + 2).toIntOrNull() ?: 0
+                            if (cnt > 0) playCounts[path] = cnt
+                        }
+                    }
+                    "hourly" -> {
+                        v.split(',').forEach { pair ->
+                            val parts = pair.split(':')
+                            if (parts.size == 2) {
+                                val h = parts[0].toIntOrNull()
+                                val c = parts[1].toIntOrNull()
+                                if (h != null && h in 0..23 && c != null && c > 0) hourlyPlays[h] = c
+                            }
+                        }
+                    }
+                    "playlist" -> {
+                        val parts = v.split("::", limit = 3)
+                        if (parts.size == 3) {
+                            val paths = parts[2].split('|').filter { it.isNotBlank() }
+                            playlists.add(DesktopPlaylist(parts[0], parts[1], paths))
+                        }
+                    }
+                    "lyricOffset" -> {
+                        val sep = v.lastIndexOf("::")
+                        if (sep > 0) {
+                            val path = v.substring(0, sep)
+                            val ms = v.substring(sep + 2).toLongOrNull() ?: 0L
+                            if (ms != 0L) lyricOffsets[path] = ms
+                        }
+                    }
+                }
+            }
         }
-        val props = Properties()
-        runCatching { configFile.inputStream().use { props.load(it) } }
-        val folders = props.getProperty("folders", "")
-            .split("|")
-            .map { it.trim() }
-            .filter { it.isNotBlank() && File(it).exists() }
-        val favs = props.getProperty("favorites", "")
-            .split("|")
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .toSet()
-        val isDark = props.getProperty("dark_theme", "true").toBoolean()
-        val scene = DesktopSceneStyle.entries.firstOrNull { it.name == props.getProperty("scene") } ?: DesktopSceneStyle.VINYL_STUDY
-        val spectrum = DesktopSpectrumStyle.entries.firstOrNull { it.name == props.getProperty("spectrum") } ?: DesktopSpectrumStyle.SILK_RIBBON
-        val vol = props.getProperty("volume", "0.85").toFloatOrNull()?.coerceIn(0f, 1f) ?: 0.85f
-        return SavedConfig(folders, favs, isDark, scene, spectrum, vol)
+        return DesktopConfig(
+            folders = folders,
+            darkMode = darkMode,
+            accentColor = accent,
+            layoutDensity = density,
+            fontScale = fontScale,
+            sceneStyle = scene,
+            spectrumStyle = spectrum,
+            favoritePaths = favs,
+            recentPaths = recents,
+            playCounts = playCounts,
+            hourlyPlays = hourlyPlays,
+            playlists = playlists,
+            eqEnabled = eqEnabled,
+            eqBandsDb = eqBands,
+            lyricOffsetsMs = lyricOffsets,
+        )
     }
 
-    fun save(config: SavedConfig) {
+    fun save(cfg: DesktopConfig) {
         runCatching {
-            val props = Properties().apply {
-                setProperty("folders", config.folders.joinToString("|"))
-                setProperty("favorites", config.favoritePaths.joinToString("|"))
-                setProperty("dark_theme", config.isDarkTheme.toString())
-                setProperty("scene", config.sceneStyle.name)
-                setProperty("spectrum", config.spectrumStyle.name)
-                setProperty("volume", config.volume.toString())
+            val sb = StringBuilder()
+            sb.appendLine("folders=${cfg.folders.joinToString("|")}")
+            sb.appendLine("darkMode=${cfg.darkMode}")
+            sb.appendLine("accent=${cfg.accentColor.name}")
+            sb.appendLine("density=${cfg.layoutDensity.name}")
+            sb.appendLine("fontScale=${cfg.fontScale}")
+            sb.appendLine("scene=${cfg.sceneStyle.name}")
+            sb.appendLine("spectrum=${cfg.spectrumStyle.name}")
+            sb.appendLine("favorites=${cfg.favoritePaths.joinToString("|")}")
+            sb.appendLine("recents=${cfg.recentPaths.take(50).joinToString("|")}")
+            sb.appendLine("eqEnabled=${cfg.eqEnabled}")
+            sb.appendLine("eqBands=${cfg.eqBandsDb.joinToString(",")}")
+            val hourlyStr = cfg.hourlyPlays.entries.joinToString(",") { "${it.key}:${it.value}" }
+            sb.appendLine("hourly=$hourlyStr")
+            cfg.playCounts.forEach { (path, cnt) ->
+                if (cnt > 0) sb.appendLine("playCount=$path::$cnt")
             }
-            configFile.outputStream().use { props.store(it, "PureMusic Desktop Config") }
+            cfg.playlists.forEach { pl ->
+                sb.appendLine("playlist=${pl.id}::${pl.name.replace("::", " ")}::${pl.songPaths.joinToString("|")}")
+            }
+            cfg.lyricOffsetsMs.forEach { (path, ms) ->
+                if (ms != 0L) sb.appendLine("lyricOffset=$path::$ms")
+            }
+            configFile.writeText(sb.toString(), StandardCharsets.UTF_8)
         }
     }
 }
