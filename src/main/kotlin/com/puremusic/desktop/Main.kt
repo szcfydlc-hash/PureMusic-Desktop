@@ -4,8 +4,15 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -109,6 +116,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -119,6 +127,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -130,6 +139,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -395,9 +405,11 @@ fun main() = application {
 
     // Derived collections
     val songsByPath = remember(allSongs) { allSongs.associateBy { it.filePath } }
-    val filteredSongs = remember(allSongs, searchQuery, sortOrder) {
+    val filteredSongs = remember(allSongs, searchQuery, sortOrder, config.shortAudioFilterSec) {
+        val minDurMs = config.shortAudioFilterSec * 1000L
+        val durFiltered = if (minDurMs > 0L) allSongs.filter { it.durationMs >= minDurMs } else allSongs
         val q = searchQuery.trim().lowercase(Locale.getDefault())
-        val base = if (q.isEmpty()) allSongs else allSongs.filter {
+        val base = if (q.isEmpty()) durFiltered else durFiltered.filter {
             it.title.lowercase(Locale.getDefault()).contains(q) ||
                 it.artist.lowercase(Locale.getDefault()).contains(q) ||
                 it.album.lowercase(Locale.getDefault()).contains(q)
@@ -448,13 +460,20 @@ fun main() = application {
             .take(50)
     }
 
-    val vinylAngle = remember { Animatable(0f) }
-    LaunchedEffect(playerState.isPlaying) {
-        if (playerState.isPlaying) {
-            while (isActive) {
-                val start = vinylAngle.value % 360f
-                vinylAngle.snapTo(start)
-                vinylAngle.animateTo(start + 360f, animationSpec = tween(16_000, easing = LinearEasing))
+    var vinylAngleDeg by remember { mutableFloatStateOf(0f) }
+    var vinylVelocity by remember { mutableFloatStateOf(0f) }
+    val isPlayingForVinyl = playerState.isPlaying
+    LaunchedEffect(isPlayingForVinyl) {
+        var lastNanos = 0L
+        val targetVel = if (isPlayingForVinyl) 24f else 0f // 24 deg/s = 15s per rotation
+        while (isActive && (isPlayingForVinyl || vinylVelocity > 0.15f)) {
+            withFrameNanos { nanos ->
+                val dt = if (lastNanos == 0L) 0.016f else ((nanos - lastNanos) / 1_000_000_000f).coerceIn(0.004f, 0.05f)
+                lastNanos = nanos
+                val accel = if (isPlayingForVinyl) 3.6f else 2.8f
+                vinylVelocity += (targetVel - vinylVelocity) * (accel * dt).coerceAtMost(1f)
+                if (!isPlayingForVinyl && vinylVelocity < 0.15f) vinylVelocity = 0f
+                vinylAngleDeg = (vinylAngleDeg + vinylVelocity * dt) % 360f
             }
         }
     }
@@ -495,16 +514,8 @@ fun main() = application {
     val lyricFont = remember(config.lyricFontStyle, config.appFontStyle, config.customFontPath) {
         DesktopTypographyFamilies.resolveLyricFont(config.lyricFontStyle, config.appFontStyle, config.customFontPath)
     }
-    val bodyWeight = when (config.fontWeightLevel) {
-        DesktopFontWeightLevel.LIGHT -> FontWeight.Light
-        DesktopFontWeightLevel.STANDARD -> FontWeight.Normal
-        DesktopFontWeightLevel.BOLD -> FontWeight.Medium
-    }
-    val titleWeight = when (config.fontWeightLevel) {
-        DesktopFontWeightLevel.LIGHT -> FontWeight.Normal
-        DesktopFontWeightLevel.STANDARD -> FontWeight.SemiBold
-        DesktopFontWeightLevel.BOLD -> FontWeight.Bold
-    }
+    val bodyWeight = FontWeight(config.fontWeightValue.coerceIn(200, 900))
+    val titleWeight = FontWeight((config.fontWeightValue + 200).coerceIn(300, 900))
     val baseTypo = Typography()
     val scaledTypo = Typography(
         headlineMedium = baseTypo.headlineMedium.copy(fontFamily = appFont, fontWeight = titleWeight),
@@ -588,6 +599,7 @@ fun main() = application {
         CompositionLocalProvider(
             LocalDensity provides Density(baseDensity.density, fontScale = baseDensity.fontScale * scale),
             LocalLyricFontFamily provides lyricFont,
+            LocalLyricSlantDegrees provides config.lyricSlantDegrees,
         ) {
         MaterialTheme(colorScheme = colorScheme, typography = scaledTypo) {
             val currentLyricOffset = playerState.currentSong?.filePath?.let { config.lyricOffsetsMs[it] } ?: 0L
@@ -702,44 +714,80 @@ fun main() = application {
                                 .padding(top = 24.dp, bottom = 18.dp),
                             verticalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                DesktopTab.entries.forEach { tab ->
-                                    val selected = tab == activeTab && activeDetail == null
-                                    val hoverSrc = remember { MutableInteractionSource() }
-                                    val hovered by hoverSrc.collectIsHoveredAsState()
-                                    Row(
+                            // Elastic 60fps spring-gliding liquid-glass chapter indicator
+                            val selectedTabIdx = DesktopTab.entries.indexOf(activeTab).coerceAtLeast(0)
+                            val indicatorOffsetY by animateDpAsState(
+                                targetValue = (selectedTabIdx * 46).dp,
+                                animationSpec = spring(dampingRatio = 0.72f, stiffness = 360f),
+                                label = "sidebarGlideY",
+                            )
+                            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp)) {
+                                if (activeDetail == null) {
+                                    val glassPillShape = RoundedCornerShape(10.dp)
+                                    Box(
                                         modifier = Modifier
+                                            .offset(y = indicatorOffsetY)
                                             .fillMaxWidth()
                                             .height(42.dp)
+                                            .shadow(if (config.liquidGlassEnabled) 4.dp else 0.dp, glassPillShape, ambientColor = Color.Black.copy(alpha = 0.10f))
+                                            .clip(glassPillShape)
                                             .background(
-                                                when {
-                                                    selected -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.055f)
-                                                    hovered -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.03f)
-                                                    else -> Color.Transparent
+                                                if (config.liquidGlassEnabled) {
+                                                    MaterialTheme.colorScheme.surface.copy(alpha = config.liquidGlassLevel.surfaceAlpha)
+                                                } else {
+                                                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
                                                 },
                                             )
-                                            .hoverable(hoverSrc)
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable {
-                                                activeTab = tab
-                                                activeDetail = null
-                                            },
-                                        verticalAlignment = Alignment.CenterVertically,
+                                            .border(
+                                                width = if (config.liquidGlassEnabled) 0.7.dp else 0.dp,
+                                                color = if (config.liquidGlassEnabled) MaterialTheme.colorScheme.outline.copy(alpha = 0.75f) else Color.Transparent,
+                                                shape = glassPillShape,
+                                            ),
+                                        contentAlignment = Alignment.CenterStart,
                                     ) {
-                                        // 3dp Bookmark Spine Line on active chapter
                                         Box(
                                             modifier = Modifier
+                                                .padding(start = 2.dp)
                                                 .width(3.dp)
-                                                .height(if (selected) 24.dp else 0.dp)
+                                                .height(22.dp)
+                                                .clip(CircleShape)
                                                 .background(MaterialTheme.colorScheme.primary),
                                         )
-                                        Spacer(modifier = Modifier.width(24.dp))
-                                        Text(
-                                            text = tab.label,
-                                            fontSize = 15.sp,
-                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    }
+                                }
+
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    DesktopTab.entries.forEach { tab ->
+                                        val selected = tab == activeTab && activeDetail == null
+                                        val hoverSrc = remember { MutableInteractionSource() }
+                                        val hovered by hoverSrc.collectIsHoveredAsState()
+                                        val textCol by animateColorAsState(
+                                            if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            tween(180),
+                                            label = "sideTxt",
                                         )
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(42.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(if (!selected && hovered) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.035f) else Color.Transparent)
+                                                .hoverable(hoverSrc)
+                                                .pointerHoverIcon(PointerIcon.Hand)
+                                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                                                    activeTab = tab
+                                                    activeDetail = null
+                                                },
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Spacer(modifier = Modifier.width(18.dp))
+                                            Text(
+                                                text = tab.label,
+                                                fontSize = 15.sp,
+                                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                                color = textCol,
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -770,9 +818,17 @@ fun main() = application {
 
                         VerticalDivider(thickness = 0.6.dp, color = MaterialTheme.colorScheme.outline)
 
-                        // Right Monograph Content Page
-                        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                            val detail = activeDetail
+                        // Right Monograph Content Page with silky 60fps AnimatedContent transitions
+                        AnimatedContent(
+                            targetState = Pair(activeTab, activeDetail),
+                            transitionSpec = {
+                                (fadeIn(tween(220, easing = FastOutSlowInEasing)) + slideInVertically(tween(240, easing = FastOutSlowInEasing)) { 14 }) togetherWith
+                                    fadeOut(tween(130))
+                            },
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            label = "mainPageTransition",
+                        ) { (currentTab, detail) ->
+                        Box(modifier = Modifier.fillMaxSize()) {
                             if (detail is DesktopDetailView.ListeningReportView) {
                                 DesktopListeningReportPage(
                                     allSongs = allSongs,
@@ -818,7 +874,7 @@ fun main() = application {
                                     onAddToPlaylist = { addingSongToPlaylist = it },
                                 )
                             } else {
-                                when (activeTab) {
+                                when (currentTab) {
                                     DesktopTab.LIBRARY -> DesktopLibraryPage(
                                         subTab = librarySubTab,
                                         onSelectSubTab = { librarySubTab = it },
@@ -882,6 +938,24 @@ fun main() = application {
                                         onSelectAppFont = { f -> updateConfig { it.copy(appFontStyle = f) } },
                                         onSelectLyricFont = { lf -> updateConfig { it.copy(lyricFontStyle = lf) } },
                                         onSelectFontWeight = { fw -> updateConfig { it.copy(fontWeightLevel = fw) } },
+                                        onFontWeightValueChange = { wv -> updateConfig { it.copy(fontWeightValue = wv.coerceIn(200, 900)) } },
+                                        onLyricSlantChange = { sl -> updateConfig { it.copy(lyricSlantDegrees = sl.coerceIn(0f, 16f)) } },
+                                        onToggleFloatingBar = { fl -> updateConfig { it.copy(floatingControlBar = fl) } },
+                                        onToggleLiquidGlass = { lg -> updateConfig { it.copy(liquidGlassEnabled = lg) } },
+                                        onSelectLiquidGlassLevel = { lv -> updateConfig { it.copy(liquidGlassLevel = lv) } },
+                                        onControlBarHeightChange = { h -> updateConfig { it.copy(controlBarHeightDp = h.coerceIn(54, 76)) } },
+                                        onSelectShortAudioFilter = { sec -> updateConfig { it.copy(shortAudioFilterSec = sec) } },
+                                        onToggleEqEnabled = { en -> updateConfig { it.copy(eqEnabled = en) } },
+                                        onEqBandChange = { idx, db ->
+                                            updateConfig { cfg ->
+                                                val next = cfg.eqBandsDb.toMutableList()
+                                                if (idx in next.indices) next[idx] = db
+                                                cfg.copy(eqEnabled = true, eqBandsDb = next)
+                                            }
+                                        },
+                                        onApplyEqPreset = { preset -> updateConfig { it.copy(eqEnabled = true, eqBandsDb = preset.gainsDb) } },
+                                        onSelectScene = { sc -> updateConfig { it.copy(sceneStyle = sc) } },
+                                        onSelectSpectrum = { sp -> updateConfig { it.copy(spectrumStyle = sp) } },
                                         onPickCustomFont = {
                                             val chosen = pickSingleFile("选择本地字体文件", "字体文件 (*.ttf, *.otf, *.ttc)", "ttf", "otf", "ttc")
                                             if (chosen != null) {
@@ -896,9 +970,12 @@ fun main() = application {
                                             rescanLibrary(updated)
                                         },
                                         onRescan = { rescanLibrary(config.folders) },
+                                        totalSongsCount = allSongs.size,
+                                        visibleSongsCount = filteredSongs.size,
                                     )
                                 }
                             }
+                        }
                         }
                     }
 
@@ -908,6 +985,10 @@ fun main() = application {
                         isFavorite = playerState.currentSong?.filePath in config.favoritePaths,
                         isImmersive = false,
                         isDarkSurface = config.darkMode,
+                        floatingCapsule = config.floatingControlBar,
+                        liquidGlassEnabled = config.liquidGlassEnabled,
+                        liquidGlassLevel = config.liquidGlassLevel,
+                        barHeightDp = config.controlBarHeightDp,
                         accentColor = MaterialTheme.colorScheme.primary,
                         eqActive = config.eqEnabled || showEqDrawer,
                         queueOpen = showQueueDrawer,
@@ -958,8 +1039,8 @@ fun main() = application {
                 // Unified Full-Screen Immersive Stage (4 cohesive scenes sharing exact same top/bottom control language)
                 AnimatedVisibility(
                     visible = showImmersiveStage && playerState.currentSong != null,
-                    enter = fadeIn(tween(240)) + scaleIn(initialScale = 0.98f, animationSpec = tween(240)),
-                    exit = fadeOut(tween(180)) + scaleOut(targetScale = 0.99f, animationSpec = tween(180)),
+                    enter = fadeIn(tween(260)) + slideInVertically(spring(dampingRatio = 0.86f, stiffness = 320f)) { it / 10 } + scaleIn(initialScale = 0.965f, animationSpec = tween(260, easing = FastOutSlowInEasing)),
+                    exit = fadeOut(tween(190)) + slideOutVertically(tween(200)) { it / 12 } + scaleOut(targetScale = 0.98f, animationSpec = tween(190)),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     val song = playerState.currentSong
@@ -971,7 +1052,7 @@ fun main() = application {
                             isFavorite = song.filePath in config.favoritePaths,
                             lyrics = currentLyrics,
                             activeLyricIdx = activeLyricIdx,
-                            vinylRotation = vinylAngle.value,
+                            vinylRotation = vinylAngleDeg,
                             sceneStyle = config.sceneStyle,
                             spectrumStyle = config.spectrumStyle,
                             showSpectrum = showSpectrumInImmersive,
@@ -1290,7 +1371,7 @@ fun main() = application {
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        DesktopSpinningVinylDisc(filePath = playerState.currentSong?.filePath, rotationDegrees = vinylAngle.value, discSize = 66.dp)
+                        DesktopSpinningVinylDisc(filePath = playerState.currentSong?.filePath, rotationDegrees = vinylAngleDeg, discSize = 66.dp)
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(playerState.currentSong?.title ?: "暂未播放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1327,6 +1408,10 @@ private fun UnifiedBottomControlRail(
     isFavorite: Boolean,
     isImmersive: Boolean,
     isDarkSurface: Boolean,
+    floatingCapsule: Boolean = false,
+    liquidGlassEnabled: Boolean = false,
+    liquidGlassLevel: DesktopLiquidGlassLevel = DesktopLiquidGlassLevel.MEDIUM,
+    barHeightDp: Int = 62,
     accentColor: Color,
     eqActive: Boolean,
     queueOpen: Boolean,
@@ -1345,7 +1430,13 @@ private fun UnifiedBottomControlRail(
     onToggleSpectrum: () -> Unit,
 ) {
     val song = playerState.currentSong
-    val barBg = if (isImmersive) Color.Transparent else MaterialTheme.colorScheme.surface
+    val useFloating = floatingCapsule && !isImmersive
+    val capsuleShape = RoundedCornerShape(20.dp)
+    val barBg = when {
+        isImmersive -> Color.Transparent
+        liquidGlassEnabled -> MaterialTheme.colorScheme.surface.copy(alpha = liquidGlassLevel.surfaceAlpha)
+        else -> MaterialTheme.colorScheme.surface
+    }
     val ink = if (isDarkSurface) Color(0xFFF3EEE4) else MaterialTheme.colorScheme.onBackground
     val muted = if (isDarkSurface) Color(0xFFA69F95) else MaterialTheme.colorScheme.onSurfaceVariant
     val hairline = if (isDarkSurface) Color.White.copy(alpha = 0.14f) else MaterialTheme.colorScheme.outline
@@ -1353,7 +1444,34 @@ private fun UnifiedBottomControlRail(
 
     var railWidthPx by remember { mutableFloatStateOf(1f) }
 
-    Column(modifier = Modifier.fillMaxWidth().background(barBg)) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (useFloating) Modifier.padding(horizontal = 24.dp, vertical = 10.dp) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (useFloating) {
+                    Modifier
+                        .shadow(if (liquidGlassEnabled) 14.dp else 8.dp, capsuleShape, ambientColor = Color.Black.copy(alpha = 0.16f))
+                        .clip(capsuleShape)
+                        .background(barBg)
+                        .border(
+                            width = 0.8.dp,
+                            brush = Brush.verticalGradient(
+                                0.0f to Color.White.copy(alpha = if (liquidGlassEnabled) liquidGlassLevel.rimAlpha + 0.14f else 0.18f),
+                                1.0f to hairline,
+                            ),
+                            shape = capsuleShape,
+                        )
+                } else {
+                    Modifier.background(barBg)
+                },
+            ),
+    ) {
         // Razor-thin full-width bookmark progress line (click or drag anywhere along the edge to seek!)
         Box(
             modifier = Modifier
@@ -1378,7 +1496,7 @@ private fun UnifiedBottomControlRail(
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 24.dp),
+            modifier = Modifier.fillMaxWidth().height(barHeightDp.coerceIn(54, 76).dp).padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Left: Cover + Title in Main Mode, or quiet timestamps in Immersive Mode
@@ -1443,18 +1561,20 @@ private fun UnifiedBottomControlRail(
                 IconButton(onClick = onToggleShuffle, modifier = Modifier.size(30.dp).pointerHoverIcon(PointerIcon.Hand)) {
                     Icon(Icons.Rounded.Shuffle, contentDescription = "随机", tint = if (playerState.shuffleEnabled) accentColor else muted, modifier = Modifier.size(16.dp))
                 }
-                IconButton(onClick = onSkipPrevious, modifier = Modifier.size(34.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                Box(modifier = Modifier.size(34.dp).clip(CircleShape).desktopSpringPress(onClick = onSkipPrevious), contentAlignment = Alignment.Center) {
                     Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", tint = ink, modifier = Modifier.size(22.dp))
                 }
-                IconButton(onClick = onTogglePlayPause, modifier = Modifier.size(40.dp).pointerHoverIcon(PointerIcon.Hand)) {
-                    Icon(
-                        imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = "播放/暂停",
-                        tint = ink,
-                        modifier = Modifier.size(28.dp),
-                    )
+                Box(modifier = Modifier.size(40.dp).clip(CircleShape).desktopSpringPress(pressedScale = 0.85f, onClick = onTogglePlayPause), contentAlignment = Alignment.Center) {
+                    AnimatedContent(targetState = playerState.isPlaying, transitionSpec = { (fadeIn(tween(140)) + scaleIn(initialScale = 0.82f)) togetherWith (fadeOut(tween(110)) + scaleOut(targetScale = 0.82f)) }, label = "playPauseAnim") { playing ->
+                        Icon(
+                            imageVector = if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = "播放/暂停",
+                            tint = ink,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
                 }
-                IconButton(onClick = onSkipNext, modifier = Modifier.size(34.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                Box(modifier = Modifier.size(34.dp).clip(CircleShape).desktopSpringPress(onClick = onSkipNext), contentAlignment = Alignment.Center) {
                     Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", tint = ink, modifier = Modifier.size(22.dp))
                 }
                 IconButton(onClick = onCycleRepeat, modifier = Modifier.size(30.dp).pointerHoverIcon(PointerIcon.Hand)) {
@@ -1513,6 +1633,7 @@ private fun UnifiedBottomControlRail(
                 }
             }
         }
+    }
     }
 }
 
@@ -2499,6 +2620,8 @@ private fun DesktopEqualizerDrawer(
 private fun DesktopSettingsPage(
     config: DesktopConfig,
     sleepTimerRemainingSec: Int?,
+    totalSongsCount: Int,
+    visibleSongsCount: Int,
     onToggleDarkMode: (Boolean) -> Unit,
     onSelectAccent: (DesktopAccentColor) -> Unit,
     onSelectDensity: (DesktopLayoutDensity) -> Unit,
@@ -2506,6 +2629,18 @@ private fun DesktopSettingsPage(
     onSelectAppFont: (DesktopFontStyle) -> Unit,
     onSelectLyricFont: (DesktopLyricFontStyle) -> Unit,
     onSelectFontWeight: (DesktopFontWeightLevel) -> Unit,
+    onFontWeightValueChange: (Int) -> Unit,
+    onLyricSlantChange: (Float) -> Unit,
+    onToggleFloatingBar: (Boolean) -> Unit,
+    onToggleLiquidGlass: (Boolean) -> Unit,
+    onSelectLiquidGlassLevel: (DesktopLiquidGlassLevel) -> Unit,
+    onControlBarHeightChange: (Int) -> Unit,
+    onSelectShortAudioFilter: (Int) -> Unit,
+    onToggleEqEnabled: (Boolean) -> Unit,
+    onEqBandChange: (Int, Float) -> Unit,
+    onApplyEqPreset: (EqPreset) -> Unit,
+    onSelectScene: (DesktopSceneStyle) -> Unit,
+    onSelectSpectrum: (DesktopSpectrumStyle) -> Unit,
     onPickCustomFont: () -> Unit,
     onSetSleepTimerMin: (Int) -> Unit,
     onAddFolder: () -> Unit,
@@ -2513,8 +2648,8 @@ private fun DesktopSettingsPage(
     onRescan: () -> Unit,
 ) {
     var selectedSection by remember { mutableStateOf(0) }
-    val sections = listOf("外观与字体", "音乐文件夹", "播放与定时", "关于")
-    val cardShape = RoundedCornerShape(10.dp)
+    val sections = listOf("外观", "排印", "曲库", "音效")
+    val cardShape = RoundedCornerShape(12.dp)
     val surface = MaterialTheme.colorScheme.surface
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
@@ -2525,7 +2660,7 @@ private fun DesktopSettingsPage(
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxHeight().widthIn(max = 840.dp).fillMaxWidth().padding(horizontal = 36.dp),
+            modifier = Modifier.fillMaxHeight().widthIn(max = 860.dp).fillMaxWidth().padding(horizontal = 36.dp),
             contentPadding = PaddingValues(vertical = 26.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
@@ -2539,60 +2674,141 @@ private fun DesktopSettingsPage(
             }
 
             item(key = "set_tabs") {
-                Row(
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)).padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    sections.forEachIndexed { idx, label ->
-                        val sel = idx == selectedSection
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (sel) surface else Color.Transparent)
-                                .then(if (sel) Modifier.border(0.6.dp, outline, RoundedCornerShape(8.dp)) else Modifier)
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable { selectedSection = idx }
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                        ) {
-                            Text(label, fontSize = 13.sp, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, color = if (sel) accent else muted)
-                        }
-                    }
-                }
+                DesktopLiquidGlassSegmentedRow(
+                    items = sections,
+                    selectedIndex = selectedSection,
+                    liquidGlassEnabled = config.liquidGlassEnabled,
+                    glassLevel = config.liquidGlassLevel,
+                    onSelect = { selectedSection = it },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
 
             when (selectedSection) {
-                0 -> item(key = "sec_app") {
+                // 0. 外观（悬浮胶囊 + 液态玻璃折射 + 纸色 + 书脊色 + 密度）
+                0 -> item(key = "sec_appearance") {
                     Column(
                         modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(18.dp),
                     ) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column {
-                                Text("外观与字体", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
-                                Text("选择后自动保存，让阅读和聆听更自在。", fontSize = 12.sp, color = muted)
+                                Text("悬浮与液态玻璃", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
+                                Text("对齐移动端装帧质感，随时在书页纯色与琉璃玻璃间切换。", fontSize = 12.sp, color = muted)
                             }
                             Text(
                                 text = "恢复默认",
                                 fontSize = 12.sp,
                                 color = muted,
-                                modifier = Modifier.border(0.6.dp, outline, RoundedCornerShape(8.dp)).pointerHoverIcon(PointerIcon.Hand).clickable {
-                                    onToggleDarkMode(false); onSelectAccent(DesktopAccentColor.CINNABAR); onSelectDensity(DesktopLayoutDensity.STANDARD); onFontScaleChange(1.0f); onSelectAppFont(DesktopFontStyle.YAHEI); onSelectLyricFont(DesktopLyricFontStyle.SERIF); onSelectFontWeight(DesktopFontWeightLevel.STANDARD)
+                                modifier = Modifier.border(0.6.dp, outline, RoundedCornerShape(8.dp)).desktopSpringPress {
+                                    onToggleDarkMode(false)
+                                    onSelectAccent(DesktopAccentColor.CINNABAR)
+                                    onSelectDensity(DesktopLayoutDensity.STANDARD)
+                                    onToggleFloatingBar(true)
+                                    onToggleLiquidGlass(true)
+                                    onSelectLiquidGlassLevel(DesktopLiquidGlassLevel.MEDIUM)
+                                    onControlBarHeightChange(62)
                                 }.padding(horizontal = 12.dp, vertical = 6.dp),
                             )
                         }
 
-                        // Signature Live Preview Card with 3.5dp left book-spine accent bar
-                        Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.background).border(0.6.dp, outline, RoundedCornerShape(8.dp))) {
-                            Box(modifier = Modifier.width(3.5.dp).height(126.dp).background(accent))
-                            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Text("简约音乐 · 外观预览", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = accent)
-                                Text("把喜欢的音乐，留在身边。", style = MaterialTheme.typography.bodyMedium, color = ink)
-                                Text("让晚风陪着音乐", fontSize = 24.sp, fontFamily = LocalLyricFontFamily.current, fontWeight = FontWeight.Bold, color = ink)
-                                Text("Simple moments, beautiful music.", fontSize = 12.sp, color = muted)
+                        // Live Liquid Glass Preview Banner
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(84.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.background)
+                                .border(0.6.dp, outline, RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("曲库 · 宣纸排印底层透出预览 · $totalSongsCount 首本地音乐", fontSize = 11.sp, color = muted.copy(alpha = 0.55f))
+                                Text("夜航星 · 光影之间 · 爱在深秋 · 180g 黑胶装帧", fontSize = 11.sp, color = muted.copy(alpha = 0.45f))
+                            }
+                            val previewShape = RoundedCornerShape(if (config.floatingControlBar) 18.dp else 6.dp)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth(if (config.floatingControlBar) 0.86f else 0.96f)
+                                    .height(46.dp)
+                                    .shadow(if (config.floatingControlBar) 8.dp else 1.dp, previewShape)
+                                    .clip(previewShape)
+                                    .background(if (config.liquidGlassEnabled) surface.copy(alpha = config.liquidGlassLevel.surfaceAlpha) else surface)
+                                    .border(0.75.dp, if (config.liquidGlassEnabled) Color.White.copy(alpha = config.liquidGlassLevel.rimAlpha) else outline, previewShape)
+                                    .padding(horizontal = 18.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    text = if (config.liquidGlassEnabled) "液态玻璃 · ${config.liquidGlassLevel.label}" else "古典书页纯色",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = ink,
+                                )
+                                Text(
+                                    text = if (config.floatingControlBar) "悬浮胶囊 · ${config.controlBarHeightDp}dp" else "贴边底栏 · ${config.controlBarHeightDp}dp",
+                                    fontSize = 11.5.sp,
+                                    color = accent,
+                                )
                             }
                         }
 
-                        // Theme Mode
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("悬浮播放胶囊", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("开启后底部播放控制栏变为凌空圆角悬浮胶囊。", fontSize = 12.sp, color = muted)
+                            }
+                            Switch(checked = config.floatingControlBar, onCheckedChange = onToggleFloatingBar, colors = SwitchDefaults.colors(checkedTrackColor = accent))
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("液态玻璃折射", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("为侧边栏滑块、分段标签与悬浮底栏启用光学高光折射。", fontSize = 12.sp, color = muted)
+                            }
+                            Switch(checked = config.liquidGlassEnabled, onCheckedChange = onToggleLiquidGlass, colors = SwitchDefaults.colors(checkedTrackColor = accent))
+                        }
+
+                        if (config.liquidGlassEnabled) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column {
+                                    Text("液态玻璃档位", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                    Text(config.liquidGlassLevel.desc, fontSize = 12.sp, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    DesktopLiquidGlassLevel.entries.forEach { lv ->
+                                        val sel = config.liquidGlassLevel == lv
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
+                                                .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
+                                                .desktopSpringPress { onSelectLiquidGlassLevel(lv) }
+                                                .padding(horizontal = 14.dp, vertical = 7.dp),
+                                        ) {
+                                            Text(lv.label, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.width(200.dp)) {
+                                Text("底部播放条高度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("${config.controlBarHeightDp}dp", fontSize = 12.sp, color = accent)
+                            }
+                            DesktopSleekSlider(
+                                value = config.controlBarHeightDp.toFloat(),
+                                onValueChange = { onControlBarHeightChange(it.toInt()) },
+                                valueRange = 54f..76f,
+                                activeColor = accent,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+
+                        HorizontalDivider(thickness = 0.5.dp, color = outline)
+
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column {
                                 Text("纸色主题", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
@@ -2606,8 +2822,7 @@ private fun DesktopSettingsPage(
                                             .clip(RoundedCornerShape(8.dp))
                                             .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
                                             .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable { onToggleDarkMode(dm) }
+                                            .desktopSpringPress { onToggleDarkMode(dm) }
                                             .padding(horizontal = 14.dp, vertical = 7.dp),
                                     ) {
                                         Text(lbl, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
@@ -2616,9 +2831,6 @@ private fun DesktopSettingsPage(
                             }
                         }
 
-                        HorizontalDivider(thickness = 0.5.dp, color = outline)
-
-                        // Book-Spine Accent Colors
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column {
                                 Text("书脊强调色", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
@@ -2633,8 +2845,7 @@ private fun DesktopSettingsPage(
                                             .clip(RoundedCornerShape(6.dp))
                                             .background(Color(ac.hex))
                                             .border(if (sel) 2.dp else 0.dp, if (sel) ink else Color.Transparent, RoundedCornerShape(6.dp))
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable { onSelectAccent(ac) },
+                                            .desktopSpringPress { onSelectAccent(ac) },
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         if (sel) Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
@@ -2643,12 +2854,9 @@ private fun DesktopSettingsPage(
                             }
                         }
 
-                        HorizontalDivider(thickness = 0.5.dp, color = outline)
-
-                        // Density
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column {
-                                Text("列表间距", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("排版密度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
                                 Text("调节曲库列表与专辑画册的呼吸留白。", fontSize = 12.sp, color = muted)
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2659,8 +2867,7 @@ private fun DesktopSettingsPage(
                                             .clip(RoundedCornerShape(8.dp))
                                             .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
                                             .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable { onSelectDensity(d) }
+                                            .desktopSpringPress { onSelectDensity(d) }
                                             .padding(horizontal = 14.dp, vertical = 7.dp),
                                     ) {
                                         Text(d.label, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
@@ -2668,16 +2875,94 @@ private fun DesktopSettingsPage(
                                 }
                             }
                         }
+                    }
+                }
 
-                        HorizontalDivider(thickness = 0.5.dp, color = outline)
-
-                        // Font Scale (Global LocalDensity.fontScale)
-                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.width(200.dp)) {
-                                Text("全局字号缩放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
-                                Text("${(config.fontScale * 100).toInt()}%（全界面实时生效）", fontSize = 12.sp, color = accent)
+                // 1. 排印（实时书卷预览 + A-/滑块/A+ + 200-900 连续字重 + 0°-16° 倾斜度 + 多字体）
+                1 -> item(key = "sec_typography") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(18.dp),
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("排印工作台", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
+                                Text("全局字号、200–900 字重、倾斜度与本地自定义字体即时生效。", fontSize = 12.sp, color = muted)
                             }
+                            Text(
+                                text = "重置排印",
+                                fontSize = 12.sp,
+                                color = muted,
+                                modifier = Modifier.border(0.6.dp, outline, RoundedCornerShape(8.dp)).desktopSpringPress {
+                                    onFontScaleChange(1.0f)
+                                    onSelectAppFont(DesktopFontStyle.YAHEI)
+                                    onSelectLyricFont(DesktopLyricFontStyle.SERIF)
+                                    onFontWeightValueChange(400)
+                                    onLyricSlantChange(0f)
+                                }.padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
+
+                        // Live Editorial Preview Card
+                        Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.background).border(0.6.dp, outline, RoundedCornerShape(10.dp))) {
+                            Box(modifier = Modifier.width(3.5.dp).height(118.dp).background(accent))
+                            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text("排印实时预览 · 字重 ${config.fontWeightValue} · ${(config.fontScale * 100).toInt()}% · 倾斜 ${config.lyricSlantDegrees.toInt()}°", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                                Text(
+                                    text = "山海自有归期，风雨自有相逢",
+                                    fontSize = 23.sp,
+                                    fontFamily = LocalLyricFontFamily.current,
+                                    fontStyle = if (config.lyricSlantDegrees >= 4f) FontStyle.Italic else FontStyle.Normal,
+                                    fontWeight = FontWeight((config.fontWeightValue + 200).coerceIn(300, 900)),
+                                    color = ink,
+                                )
+                                Text("把喜欢的音乐留在身边 · PureMusic Typography", style = MaterialTheme.typography.bodySmall, color = muted)
+                            }
+                        }
+
+                        // Global Font Scale with A- / Slider / A+
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Column(modifier = Modifier.width(150.dp)) {
+                                Text("全局字体大小", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("${(config.fontScale * 100).toInt()}%", fontSize = 12.sp, color = accent)
+                            }
+                            Box(
+                                modifier = Modifier.clip(RoundedCornerShape(8.dp)).border(0.6.dp, outline, RoundedCornerShape(8.dp)).desktopSpringPress { onFontScaleChange((config.fontScale - 0.05f).coerceIn(0.85f, 1.30f)) }.padding(horizontal = 10.dp, vertical = 5.dp),
+                            ) { Text("A-", fontSize = 12.sp, color = ink) }
                             DesktopSleekSlider(value = config.fontScale, onValueChange = onFontScaleChange, valueRange = 0.85f..1.30f, activeColor = accent, modifier = Modifier.weight(1f))
+                            Box(
+                                modifier = Modifier.clip(RoundedCornerShape(8.dp)).border(0.6.dp, outline, RoundedCornerShape(8.dp)).desktopSpringPress { onFontScaleChange((config.fontScale + 0.05f).coerceIn(0.85f, 1.30f)) }.padding(horizontal = 10.dp, vertical = 5.dp),
+                            ) { Text("A+", fontSize = 12.sp, color = ink) }
+                        }
+
+                        // 200-900 Continuous Font Weight
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.width(180.dp)) {
+                                Text("自定义字重微调", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("${config.fontWeightValue}（200 纤细 – 900 极粗）", fontSize = 12.sp, color = accent)
+                            }
+                            DesktopSleekSlider(
+                                value = config.fontWeightValue.toFloat(),
+                                onValueChange = { onFontWeightValueChange(((it / 50f).toInt() * 50).coerceIn(200, 900)) },
+                                valueRange = 200f..900f,
+                                activeColor = accent,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+
+                        // 0-16 degree Lyric Slant
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.width(180.dp)) {
+                                Text("歌词倾斜度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("${config.lyricSlantDegrees.toInt()}°（4° 以上启用手书斜体）", fontSize = 12.sp, color = accent)
+                            }
+                            DesktopSleekSlider(
+                                value = config.lyricSlantDegrees,
+                                onValueChange = onLyricSlantChange,
+                                valueRange = 0f..16f,
+                                activeColor = accent,
+                                modifier = Modifier.weight(1f),
+                            )
                         }
 
                         HorizontalDivider(thickness = 0.5.dp, color = outline)
@@ -2690,7 +2975,7 @@ private fun DesktopSettingsPage(
                                     text = if (config.appFontStyle == DesktopFontStyle.CUSTOM && !config.customFontPath.isNullOrBlank()) {
                                         "当前自定义：${File(config.customFontPath).name}"
                                     } else {
-                                        "切换微软雅黑、宋体书卷、楷体手书或导入本地字体。"
+                                        "切换微软雅黑、宋体书卷、楷体手书或导入本地 .ttf/.otf。"
                                     },
                                     fontSize = 12.sp,
                                     color = muted,
@@ -2706,10 +2991,8 @@ private fun DesktopSettingsPage(
                                             .clip(RoundedCornerShape(8.dp))
                                             .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
                                             .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable { onSelectAppFont(fs) }
+                                            .desktopSpringPress { onSelectAppFont(fs) }
                                             .padding(horizontal = 12.dp, vertical = 7.dp),
-                                        contentAlignment = Alignment.Center,
                                     ) {
                                         Text(fs.label, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
                                     }
@@ -2720,17 +3003,13 @@ private fun DesktopSettingsPage(
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(if (customSel) accent.copy(alpha = 0.12f) else Color.Transparent)
                                         .border(0.6.dp, if (customSel) accent else outline, RoundedCornerShape(8.dp))
-                                        .pointerHoverIcon(PointerIcon.Hand)
-                                        .clickable { onPickCustomFont() }
+                                        .desktopSpringPress { onPickCustomFont() }
                                         .padding(horizontal = 12.dp, vertical = 7.dp),
-                                    contentAlignment = Alignment.Center,
                                 ) {
                                     Text("导入字体", fontSize = 12.sp, color = if (customSel) accent else muted, fontWeight = if (customSel) FontWeight.SemiBold else FontWeight.Normal)
                                 }
                             }
                         }
-
-                        HorizontalDivider(thickness = 0.5.dp, color = outline)
 
                         // Lyric Font Family
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -2746,107 +3025,169 @@ private fun DesktopSettingsPage(
                                             .clip(RoundedCornerShape(8.dp))
                                             .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
                                             .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable { onSelectLyricFont(lfs) }
+                                            .desktopSpringPress { onSelectLyricFont(lfs) }
                                             .padding(horizontal = 11.dp, vertical = 7.dp),
-                                        contentAlignment = Alignment.Center,
                                     ) {
                                         Text(lfs.label, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
                                     }
                                 }
                             }
                         }
+                    }
+                }
 
-                        HorizontalDivider(thickness = 0.5.dp, color = outline)
-
-                        // Font Weight
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column {
-                                Text("字重风格", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
-                                Text("微调正文与标题的笔划粗细。", fontSize = 12.sp, color = muted)
+                // 2. 曲库（文件夹 + 短音频过滤 + 睡眠定时 + 快捷键）
+                2 -> item(key = "sec_library") {
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("本地音乐文件夹", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
+                                    Text("当前显示 $visibleSongsCount / $totalSongsCount 首 · 内置 FFmpeg 支持 MP3/FLAC/WAV/M4A/AAC/ALAC/OGG/OPUS/WMA/APE/DSF。", fontSize = 12.sp, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    TextButton(onClick = onRescan) { Text("重新扫描", fontSize = 12.sp) }
+                                    TextButton(onClick = onAddFolder) { Text("+ 添加目录", fontSize = 12.sp) }
+                                }
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                DesktopFontWeightLevel.entries.forEach { fw ->
-                                    val sel = config.fontWeightLevel == fw
+                            HorizontalDivider(thickness = 0.5.dp, color = outline)
+                            if (config.folders.isEmpty()) Text("暂未添加目录", fontSize = 12.sp, color = muted)
+                            else config.folders.forEach { path ->
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(path, fontSize = 13.sp, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                    IconButton(onClick = { onRemoveFolder(path) }, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)) {
+                                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "移除", tint = muted, modifier = Modifier.size(17.dp))
+                                    }
+                                }
+                            }
+                        }
+
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column {
+                                    Text("短音频过滤", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                    Text("自动隐藏低于指定时长的铃声、语音或提示音文件。", fontSize = 12.sp, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(0 to "关闭", 15 to "15秒", 30 to "30秒", 60 to "60秒").forEach { (sec, lbl) ->
+                                        val active = config.shortAudioFilterSec == sec
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (active) accent.copy(alpha = 0.12f) else Color.Transparent)
+                                                .border(0.6.dp, if (active) accent else outline, RoundedCornerShape(8.dp))
+                                                .desktopSpringPress { onSelectShortAudioFilter(sec) }
+                                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                        ) {
+                                            Text(lbl, fontSize = 12.sp, color = if (active) accent else muted, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
+                                        }
+                                    }
+                                }
+                            }
+                            HorizontalDivider(thickness = 0.5.dp, color = outline)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column {
+                                    Text("睡眠定时暂停", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                    Text("定时结束后自动暂停播放。", fontSize = 12.sp, color = muted)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(0 to "关闭", 15 to "15分钟", 30 to "30分钟", 60 to "60分钟").forEach { (mins, lbl) ->
+                                        val active = (mins == 0 && sleepTimerRemainingSec == null) || (mins > 0 && sleepTimerRemainingSec != null && ((sleepTimerRemainingSec + 59) / 60) in (mins - 14)..mins)
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (active) accent.copy(alpha = 0.12f) else Color.Transparent)
+                                                .border(0.6.dp, if (active) accent else outline, RoundedCornerShape(8.dp))
+                                                .desktopSpringPress { onSetSleepTimerMin(mins) }
+                                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                        ) {
+                                            Text(lbl, fontSize = 12.sp, color = if (active) accent else muted)
+                                        }
+                                    }
+                                }
+                            }
+                            HorizontalDivider(thickness = 0.5.dp, color = outline)
+                            Text("快捷键：Space 播放/暂停 · F11 真全屏 · Esc 退出全屏或抽屉 · ←/→ 全屏快退/快进 5 秒", fontSize = 12.sp, color = muted)
+                        }
+                    }
+                }
+
+                // 3. 音效（内置 5 段防削波 EQ + 默认沉浸场景/频谱 + 关于）
+                else -> item(key = "sec_audio") {
+                    val bandLabels = listOf("60Hz", "230Hz", "910Hz", "3.6kHz", "14kHz")
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column {
+                                    Text("5 段防削波均衡器 (EQ)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
+                                    Text("纯 Biquad IIR 滤波器 + 自动防爆音前级余量，关闭时 100% 直通。", fontSize = 12.sp, color = muted)
+                                }
+                                Switch(checked = config.eqEnabled, onCheckedChange = onToggleEqEnabled, colors = SwitchDefaults.colors(checkedTrackColor = accent))
+                            }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                EqPreset.entries.forEach { preset ->
                                     Box(
                                         modifier = Modifier
+                                            .weight(1f)
                                             .clip(RoundedCornerShape(8.dp))
-                                            .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
-                                            .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable { onSelectFontWeight(fw) }
-                                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                                            .border(0.6.dp, outline, RoundedCornerShape(8.dp))
+                                            .desktopSpringPress { onApplyEqPreset(preset) }
+                                            .padding(vertical = 7.dp),
                                         contentAlignment = Alignment.Center,
                                     ) {
-                                        Text(fw.label, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
+                                        Text(preset.label, fontSize = 12.sp, color = ink)
                                     }
                                 }
                             }
-                        }
-                    }
-                }
-
-                1 -> item(key = "sec_folders") {
-                    Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column {
-                                Text("本地音乐文件夹", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
-                                Text("内置 FFmpeg 全格式解码，支持 MP3 / FLAC (含 24-bit Hi-Res) / WAV / M4A / AAC / ALAC / OGG / OPUS / WMA / APE / AIFF / DSF。", fontSize = 12.sp, color = muted)
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                TextButton(onClick = onRescan) { Text("重新扫描", fontSize = 12.sp) }
-                                TextButton(onClick = onAddFolder) { Text("+ 添加目录", fontSize = 12.sp) }
-                            }
-                        }
-                        HorizontalDivider(thickness = 0.5.dp, color = outline)
-                        if (config.folders.isEmpty()) Text("暂未添加目录", fontSize = 12.sp, color = muted)
-                        else config.folders.forEach { path ->
-                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(path, fontSize = 13.sp, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                IconButton(onClick = { onRemoveFolder(path) }, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)) {
-                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "移除", tint = muted, modifier = Modifier.size(17.dp))
+                            bandLabels.forEachIndexed { idx, lbl ->
+                                val db = config.eqBandsDb.getOrElse(idx) { 0f }
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text(lbl, fontSize = 12.sp, color = muted, modifier = Modifier.width(52.dp))
+                                    DesktopSleekSlider(
+                                        value = db,
+                                        onValueChange = { onEqBandChange(idx, it) },
+                                        valueRange = -10f..10f,
+                                        activeColor = if (config.eqEnabled) accent else muted,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Text("${if (db >= 0) "+" else ""}${String.format(Locale.US, "%.1f", db)} dB", fontSize = 11.5.sp, color = if (config.eqEnabled) accent else muted, modifier = Modifier.width(58.dp), textAlign = TextAlign.End)
                                 }
                             }
                         }
-                    }
-                }
 
-                2 -> item(key = "sec_play") {
-                    Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column {
-                                Text("睡眠定时暂停", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
-                                Text("定时结束后自动暂停播放。", fontSize = 12.sp, color = muted)
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf(0 to "关闭", 15 to "15分钟", 30 to "30分钟", 60 to "60分钟").forEach { (mins, lbl) ->
-                                    val active = (mins == 0 && sleepTimerRemainingSec == null) || (mins > 0 && sleepTimerRemainingSec != null && ((sleepTimerRemainingSec + 59) / 60) in (mins - 14)..mins)
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (active) accent.copy(alpha = 0.12f) else Color.Transparent)
-                                            .border(0.6.dp, if (active) accent else outline, RoundedCornerShape(8.dp))
-                                            .pointerHoverIcon(PointerIcon.Hand)
-                                            .clickable { onSetSleepTimerMin(mins) }
-                                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                                    ) {
-                                        Text(lbl, fontSize = 12.sp, color = if (active) accent else muted)
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("默认沉浸场景", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    DesktopSceneStyle.entries.forEach { sc ->
+                                        val sel = config.sceneStyle == sc
+                                        Box(
+                                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent).border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp)).desktopSpringPress { onSelectScene(sc) }.padding(horizontal = 11.dp, vertical = 6.dp),
+                                        ) { Text(sc.label, fontSize = 12.sp, color = if (sel) accent else muted) }
                                     }
                                 }
                             }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("默认实时频谱", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    DesktopSpectrumStyle.entries.forEach { sp ->
+                                        val sel = config.spectrumStyle == sp
+                                        Box(
+                                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent).border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp)).desktopSpringPress { onSelectSpectrum(sp) }.padding(horizontal = 11.dp, vertical = 6.dp),
+                                        ) { Text(sp.label, fontSize = 12.sp, color = if (sel) accent else muted) }
+                                    }
+                                }
+                            }
+                            HorizontalDivider(thickness = 0.5.dp, color = outline)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = ink)
+                                    Text("回归音乐本身。本地离线 · 零广告 · FFmpeg 原生全格式无损内核。", fontSize = 12.sp, color = muted)
+                                }
+                                Text("v3.5.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                            }
                         }
-                        HorizontalDivider(thickness = 0.5.dp, color = outline)
-                        Text("快捷键：Space 播放/暂停 · F11 真全屏 · Esc 退出全屏或抽屉 · ←/→ 全屏快退/快进 5 秒", fontSize = 12.sp, color = muted)
-                    }
-                }
-
-                else -> item(key = "sec_about") {
-                    Row(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
-                            Text("回归音乐本身。纯粹、克制、安静陪伴每一张本地唱片。", fontSize = 12.sp, color = muted)
-                        }
-                        Text("v3.1.2", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
                     }
                 }
             }

@@ -249,8 +249,15 @@ object DesktopConfigStore {
         var appFontStyle = DesktopFontStyle.YAHEI
         var lyricFontStyle = DesktopLyricFontStyle.SERIF
         var fontWeightLevel = DesktopFontWeightLevel.STANDARD
+        var fontWeightValue = 400
+        var lyricSlantDegrees = 0f
         var customFontPath: String? = null
         var lyricFontScale = 1.0f
+        var floatingControlBar = true
+        var liquidGlassEnabled = true
+        var liquidGlassLevel = DesktopLiquidGlassLevel.MEDIUM
+        var controlBarHeightDp = 62
+        var shortAudioFilterSec = 0
         var scene = DesktopSceneStyle.VINYL_STUDY
         var spectrum = DesktopSpectrumStyle.SILK_RIBBON
         var favs = emptySet<String>()
@@ -285,8 +292,15 @@ object DesktopConfigStore {
                     "appFontStyle" -> appFontStyle = DesktopFontStyle.entries.firstOrNull { it.name == v } ?: DesktopFontStyle.YAHEI
                     "lyricFontStyle" -> lyricFontStyle = DesktopLyricFontStyle.entries.firstOrNull { it.name == v } ?: DesktopLyricFontStyle.SERIF
                     "fontWeightLevel" -> fontWeightLevel = DesktopFontWeightLevel.entries.firstOrNull { it.name == v } ?: DesktopFontWeightLevel.STANDARD
+                    "fontWeightValue" -> fontWeightValue = (v.toIntOrNull() ?: 400).coerceIn(200, 900)
+                    "lyricSlantDegrees" -> lyricSlantDegrees = (v.toFloatOrNull() ?: 0f).coerceIn(0f, 16f)
                     "customFontPath" -> customFontPath = v.takeIf { it.isNotBlank() }
                     "lyricFontScale" -> lyricFontScale = (v.toFloatOrNull() ?: 1.0f).coerceIn(0.75f, 1.45f)
+                    "floatingControlBar" -> floatingControlBar = v.toBoolean()
+                    "liquidGlassEnabled" -> liquidGlassEnabled = v.toBoolean()
+                    "liquidGlassLevel" -> liquidGlassLevel = DesktopLiquidGlassLevel.entries.firstOrNull { it.name == v } ?: DesktopLiquidGlassLevel.MEDIUM
+                    "controlBarHeightDp" -> controlBarHeightDp = (v.toIntOrNull() ?: 62).coerceIn(54, 76)
+                    "shortAudioFilterSec" -> shortAudioFilterSec = (v.toIntOrNull() ?: 0).coerceIn(0, 120)
                     "scene" -> scene = DesktopSceneStyle.entries.firstOrNull { it.name == v } ?: DesktopSceneStyle.VINYL_STUDY
                     "spectrum" -> spectrum = DesktopSpectrumStyle.entries.firstOrNull { it.name == v } ?: DesktopSpectrumStyle.SILK_RIBBON
                     "favorites" -> favs = v.split('|').filter { it.isNotBlank() }.toSet()
@@ -363,8 +377,15 @@ object DesktopConfigStore {
             appFontStyle = appFontStyle,
             lyricFontStyle = lyricFontStyle,
             fontWeightLevel = fontWeightLevel,
+            fontWeightValue = fontWeightValue,
+            lyricSlantDegrees = lyricSlantDegrees,
             customFontPath = customFontPath,
             lyricFontScale = lyricFontScale,
+            floatingControlBar = floatingControlBar,
+            liquidGlassEnabled = liquidGlassEnabled,
+            liquidGlassLevel = liquidGlassLevel,
+            controlBarHeightDp = controlBarHeightDp,
+            shortAudioFilterSec = shortAudioFilterSec,
             sceneStyle = scene,
             spectrumStyle = spectrum,
             favoritePaths = favs,
@@ -397,8 +418,15 @@ object DesktopConfigStore {
             sb.appendLine("appFontStyle=${cfg.appFontStyle.name}")
             sb.appendLine("lyricFontStyle=${cfg.lyricFontStyle.name}")
             sb.appendLine("fontWeightLevel=${cfg.fontWeightLevel.name}")
+            sb.appendLine("fontWeightValue=${cfg.fontWeightValue}")
+            sb.appendLine("lyricSlantDegrees=${cfg.lyricSlantDegrees}")
             sb.appendLine("customFontPath=${cfg.customFontPath.orEmpty()}")
             sb.appendLine("lyricFontScale=${cfg.lyricFontScale}")
+            sb.appendLine("floatingControlBar=${cfg.floatingControlBar}")
+            sb.appendLine("liquidGlassEnabled=${cfg.liquidGlassEnabled}")
+            sb.appendLine("liquidGlassLevel=${cfg.liquidGlassLevel.name}")
+            sb.appendLine("controlBarHeightDp=${cfg.controlBarHeightDp}")
+            sb.appendLine("shortAudioFilterSec=${cfg.shortAudioFilterSec}")
             sb.appendLine("scene=${cfg.sceneStyle.name}")
             sb.appendLine("spectrum=${cfg.spectrumStyle.name}")
             sb.appendLine("favorites=${cfg.favoritePaths.joinToString("|")}")

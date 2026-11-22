@@ -141,6 +141,17 @@ enum class DesktopFontWeightLevel(val label: String) {
     BOLD("厚重"),
 }
 
+enum class DesktopLiquidGlassLevel(
+    val label: String,
+    val desc: String,
+    val surfaceAlpha: Float,
+    val rimAlpha: Float,
+) {
+    LOW("低档", "轻盈薄雾，高可读低开销", 0.90f, 0.24f),
+    MEDIUM("中档", "柔和折射，温润通透", 0.78f, 0.36f),
+    HIGH("高档", "琉璃高光，层次通透", 0.66f, 0.50f),
+}
+
 enum class RepeatMode(val label: String) {
     OFF("顺序播放"),
     ALL("列表循环"),
@@ -175,8 +186,15 @@ data class DesktopConfig(
     val appFontStyle: DesktopFontStyle = DesktopFontStyle.YAHEI,
     val lyricFontStyle: DesktopLyricFontStyle = DesktopLyricFontStyle.SERIF,
     val fontWeightLevel: DesktopFontWeightLevel = DesktopFontWeightLevel.STANDARD,
+    val fontWeightValue: Int = 400,
+    val lyricSlantDegrees: Float = 0f,
     val customFontPath: String? = null,
     val lyricFontScale: Float = 1.0f,
+    val floatingControlBar: Boolean = true,
+    val liquidGlassEnabled: Boolean = true,
+    val liquidGlassLevel: DesktopLiquidGlassLevel = DesktopLiquidGlassLevel.MEDIUM,
+    val controlBarHeightDp: Int = 62,
+    val shortAudioFilterSec: Int = 0,
     val sceneStyle: DesktopSceneStyle = DesktopSceneStyle.VINYL_STUDY,
     val spectrumStyle: DesktopSpectrumStyle = DesktopSpectrumStyle.SILK_RIBBON,
     val favoritePaths: Set<String> = emptySet(),

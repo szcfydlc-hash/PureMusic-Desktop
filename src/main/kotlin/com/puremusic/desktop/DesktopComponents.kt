@@ -1,7 +1,14 @@
 package com.puremusic.desktop
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -44,6 +51,7 @@ import androidx.compose.ui.composed
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.VerticalScrollbar
@@ -299,20 +307,24 @@ fun DesktopAlbumCover(
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
-        if (bmp != null) {
-            Image(
-                bitmap = bmp,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Icon(
-                imageVector = Icons.Rounded.MusicNote,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.52f),
-                modifier = Modifier.size(iconSize),
-            )
+        Crossfade(targetState = bmp, animationSpec = tween(320), label = "coverCrossfade") { targetBmp ->
+            if (targetBmp != null) {
+                Image(
+                    bitmap = targetBmp,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Rounded.MusicNote,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+            }
         }
     }
 }
@@ -519,7 +531,7 @@ fun DesktopSpatialRecordGallery(
         if (allSongs.isEmpty()) listOf(currentSong)
         else {
             val idx = allSongs.indexOfFirst { it.id == currentSong.id }.coerceAtLeast(0)
-            List(minOf(6, allSongs.size)) { step -> allSongs[(idx + step) % allSongs.size] }
+            List(minOf(5, allSongs.size)) { step -> allSongs[(idx + step) % allSongs.size] }
         }
     }
 
@@ -562,16 +574,16 @@ fun DesktopSpatialRecordGallery(
             },
         contentAlignment = Alignment.Center,
     ) {
-        val frontSize = min(maxWidth * 0.36f, maxHeight * 0.66f).coerceIn(220.dp, 540.dp)
-        val corridorW = frontSize * 1.72f
-        val corridorH = frontSize * 1.38f
-        val baseY = 56.dp
-        val dynamicRotY = 16f + (dragOffsetX.value * 0.06f).coerceIn(-7f, 7f)
-        val camDist = 6.2f * density
+        val frontSize = min(maxWidth * 0.36f, maxHeight * 0.68f).coerceIn(220.dp, 520.dp)
+        val corridorW = frontSize * 1.44f
+        val corridorH = frontSize * 1.32f
+        val baseY = 20.dp
+        val dynamicRotY = 17f + (dragOffsetX.value * 0.06f).coerceIn(-7f, 7f)
+        val camDist = 7.5f * density
 
-        val scaleSteps = floatArrayOf(1.00f, 0.89f, 0.79f, 0.71f, 0.64f, 0.58f)
-        val xFractions = floatArrayOf(0.00f, 0.24f, 0.43f, 0.58f, 0.70f, 0.80f)
-        val yLiftDp = floatArrayOf(0f, 16f, 30f, 41f, 49f, 55f)
+        // Strict mathematical monotonic perspective (aligned with Android v2.1.5)
+        val scaleSteps = floatArrayOf(1.00f, 0.90f, 0.81f, 0.73f, 0.66f)
+        val rightProtrude = floatArrayOf(0.00f, 0.130f, 0.235f, 0.318f, 0.382f)
 
         Box(
             modifier = Modifier
@@ -589,10 +601,10 @@ fun DesktopSpatialRecordGallery(
                 val isFront = depth == 0
                 val dIdx = depth.coerceAtMost(scaleSteps.lastIndex)
                 val p = scaleSteps[dIdx]
-                val xShift = frontSize * xFractions[dIdx]
-                val yShift = (baseY - yLiftDp[dIdx].dp).coerceAtLeast(2.dp)
-                val rotY = if (isFront) dynamicRotY else 15f
-                val sleeveAlpha = (1f - depth * 0.07f).coerceAtLeast(0.48f)
+                val xShift = frontSize * (1.0f - p + rightProtrude[dIdx])
+                val yShift = baseY
+                val rotY = if (isFront) dynamicRotY else 17f
+                val sleeveAlpha = (1f - depth * 0.10f).coerceAtLeast(0.52f)
                 val spineW = 9.dp
                 val topRimH = 3.5.dp
 
@@ -601,7 +613,7 @@ fun DesktopSpatialRecordGallery(
                         .offset(x = xShift, y = yShift)
                         .width(frontSize + 24.dp)
                         .graphicsLayer {
-                            transformOrigin = TransformOrigin(0.0f, 0.42f)
+                            transformOrigin = TransformOrigin(0.0f, 0.50f)
                             scaleX = p
                             scaleY = p
                             rotationY = rotY
@@ -850,30 +862,44 @@ fun DesktopEditorialLyrics(
     }
     val family = if (useEditorialSerif) LocalLyricFontFamily.current else DesktopTypographyFamilies.uiSans
 
-    Column(modifier = modifier, horizontalAlignment = horizontalAlignment, verticalArrangement = Arrangement.Center) {
-        if (lyrics.isEmpty()) {
-            Text("纯粹聆听 · 静享此刻", fontSize = (22f * lScale).sp, fontFamily = family, fontWeight = FontWeight.Medium, color = mutedColor, textAlign = textAlign)
-            return@Column
-        }
-        if (prevText.isNotBlank()) {
-            Text(prevText, fontSize = (15.5f * lScale).sp, lineHeight = (22f * lScale).sp, fontFamily = family, color = mutedColor.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-        Text(
-            text = activePrimary,
-            fontSize = dynamicSp.sp,
-            lineHeight = (dynamicSp * 1.24f).sp,
-            fontFamily = family,
-            fontWeight = FontWeight.Bold,
-            color = if (highlightAccent) accentColor else activeColor,
-            textAlign = textAlign,
-            maxLines = 4,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (subText.isNotBlank()) {
-            Spacer(modifier = Modifier.height(14.dp))
-            Text(subText, fontSize = (18f * lScale).sp, lineHeight = (26f * lScale).sp, fontFamily = family, color = secondaryColor.copy(alpha = 0.86f), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
+    val slantDeg = LocalLyricSlantDegrees.current
+    val effectiveStyle = if (slantDeg >= 4f) FontStyle.Italic else FontStyle.Normal
+
+    AnimatedContent(
+        targetState = Triple(prevText, activePrimary, subText),
+        transitionSpec = {
+            (fadeIn(tween(280, easing = FastOutSlowInEasing)) + slideInVertically(tween(300, easing = FastOutSlowInEasing)) { it / 5 }) togetherWith
+                (fadeOut(tween(180)) + slideOutVertically(tween(190)) { -it / 6 })
+        },
+        modifier = modifier,
+        label = "smoothEditorialLyrics",
+    ) { (pTxt, curTxt, sTxt) ->
+        Column(horizontalAlignment = horizontalAlignment, verticalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+            if (lyrics.isEmpty()) {
+                Text("纯粹聆听 · 静享此刻", fontSize = (22f * lScale).sp, fontFamily = family, fontStyle = effectiveStyle, fontWeight = FontWeight.Medium, color = mutedColor, textAlign = textAlign)
+                return@Column
+            }
+            if (pTxt.isNotBlank()) {
+                Text(pTxt, fontSize = (15.5f * lScale).sp, lineHeight = (22f * lScale).sp, fontFamily = family, fontStyle = effectiveStyle, color = mutedColor.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            Text(
+                text = curTxt,
+                fontSize = dynamicSp.sp,
+                lineHeight = (dynamicSp * 1.24f).sp,
+                fontFamily = family,
+                fontStyle = effectiveStyle,
+                fontWeight = FontWeight.Bold,
+                color = if (highlightAccent) accentColor else activeColor,
+                textAlign = textAlign,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (sTxt.isNotBlank()) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(sTxt, fontSize = (18f * lScale).sp, lineHeight = (26f * lScale).sp, fontFamily = family, fontStyle = effectiveStyle, color = secondaryColor.copy(alpha = 0.86f), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }
@@ -1838,6 +1864,131 @@ fun DesktopSplashOverlay(visible: Boolean, darkMode: Boolean) {
  * and Georgia (georgia.ttf / georgiab.ttf) for editorial serif lyrics, with clean cross-OS fallback.
  */
 val LocalLyricFontFamily = compositionLocalOf<FontFamily> { DesktopTypographyFamilies.editorialSerif }
+val LocalLyricSlantDegrees = compositionLocalOf<Float> { 0f }
+
+/**
+ * Tactile Spring-Physics Press Modifier (gives every desktop button physical weight & bounce).
+ */
+fun Modifier.desktopSpringPress(
+    enabled: Boolean = true,
+    pressedScale: Float = 0.88f,
+    onClick: () -> Unit,
+): Modifier = composed {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) pressedScale else 1f,
+        animationSpec = spring(dampingRatio = 0.56f, stiffness = Spring.StiffnessMedium),
+        label = "springPress",
+    )
+    this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+        .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick)
+}
+
+/**
+ * 60fps Liquid-Glass Elastic Sliding Segmented Row (Desktop port of Android v2.1.3 LiquidGlassSlidingTabRow).
+ * Features spring-driven capsule glide, velocity stretch-and-squash, and optical specular top gleam.
+ */
+@Composable
+fun DesktopLiquidGlassSegmentedRow(
+    items: List<String>,
+    selectedIndex: Int,
+    liquidGlassEnabled: Boolean,
+    glassLevel: DesktopLiquidGlassLevel,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val surface = MaterialTheme.colorScheme.surface
+    val outline = MaterialTheme.colorScheme.outline
+    val accent = MaterialTheme.colorScheme.primary
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+
+    val animatedIndex by animateFloatAsState(
+        targetValue = selectedIndex.toFloat(),
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 380f),
+        label = "liquidGlassTabSlide",
+    )
+    val travelDist = abs(animatedIndex - selectedIndex.toFloat()).coerceIn(0f, 1f)
+    val stretchX = 1f + travelDist * 0.14f
+    val squashY = 1f - travelDist * 0.08f
+
+    BoxWithConstraints(
+        modifier = modifier
+            .height(38.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (liquidGlassEnabled) 0.55f else 0.72f))
+            .border(0.6.dp, outline.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+            .padding(3.dp),
+    ) {
+        val count = items.size.coerceAtLeast(1)
+        val tabW = maxWidth / count
+        val capsuleOffsetX = tabW * animatedIndex
+        val capsuleShape = RoundedCornerShape(9.dp)
+
+        // Elastic sliding liquid-glass droplet pill
+        Box(
+            modifier = Modifier
+                .offset(x = capsuleOffsetX)
+                .width(tabW)
+                .fillMaxHeight()
+                .graphicsLayer {
+                    scaleX = stretchX
+                    scaleY = squashY
+                }
+                .shadow(if (liquidGlassEnabled) 6.dp else 2.dp, capsuleShape, ambientColor = Color.Black.copy(alpha = 0.12f))
+                .clip(capsuleShape)
+                .background(
+                    if (liquidGlassEnabled) {
+                        Brush.verticalGradient(
+                            0.0f to surface.copy(alpha = (glassLevel.surfaceAlpha + 0.08f).coerceAtMost(0.98f)),
+                            1.0f to surface.copy(alpha = glassLevel.surfaceAlpha),
+                        )
+                    } else {
+                        Brush.verticalGradient(listOf(surface, surface))
+                    },
+                )
+                .border(
+                    width = 0.75.dp,
+                    brush = Brush.verticalGradient(
+                        0.0f to Color.White.copy(alpha = if (liquidGlassEnabled) glassLevel.rimAlpha + 0.18f else 0.15f),
+                        1.0f to outline.copy(alpha = 0.7f),
+                    ),
+                    shape = capsuleShape,
+                ),
+        )
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            items.forEachIndexed { idx, label ->
+                val sel = idx == selectedIndex
+                val txtColor by animateColorAsState(if (sel) accent else muted, tween(180), label = "segTxt")
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onSelect(idx) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 13.sp,
+                        fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
+                        color = txtColor,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
 
 object DesktopTypographyFamilies {
     private val customCache = mutableMapOf<String, FontFamily>()
