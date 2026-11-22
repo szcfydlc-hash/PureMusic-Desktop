@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.puremusic.desktop"
-version = "3.0.0"
+version = "3.1.0"
 
 dependencies {
     implementation(compose.desktop.currentOs)
@@ -16,7 +16,13 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.9.0")
 
-    // Pure-Java offline audio decoding SPI (MP3 + FLAC + built-in WAV/AIFF)
+    // Native FFmpeg Windows x86_64 decoder (MP3/FLAC/24-bit Hi-Res/WAV/M4A/AAC/ALAC/OGG/OPUS/WMA/APE/WV/AIFF/DSD)
+    implementation("org.bytedeco:javacpp:1.5.11")
+    implementation("org.bytedeco:javacpp:1.5.11:windows-x86_64")
+    implementation("org.bytedeco:ffmpeg:7.1-1.5.11")
+    implementation("org.bytedeco:ffmpeg:7.1-1.5.11:windows-x86_64")
+
+    // Pure-Java fallback offline audio decoding SPI (MP3 + FLAC + built-in WAV/AIFF)
     implementation("com.googlecode.soundlibs:mp3spi:1.9.5.4")
     implementation("org.jflac:jflac-codec:1.5.2")
 
@@ -35,7 +41,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "PureMusic"
-            packageVersion = "3.0.0"
+            packageVersion = "3.1.0"
             description = "PureMusic - Native Offline Hi-Res Local Music Player"
             vendor = "PureMusic"
             includeAllModules = true

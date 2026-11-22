@@ -16,7 +16,7 @@ data class DesktopSong(
     val folderName: String = "",
 ) {
     val isLossless: Boolean
-        get() = formatLabel in setOf("FLAC", "WAV", "AIFF", "ALAC", "APE")
+        get() = formatLabel in setOf("FLAC", "WAV", "AIFF", "ALAC", "APE", "WV", "DSF", "DFF")
 
     val isHiRes: Boolean
         get() = isLossless && (sampleRateHz >= 48000 || bitsPerSample >= 24 || bitRateKbps >= 900)
@@ -29,8 +29,9 @@ data class DesktopSong(
             } else {
                 ""
             }
+            val bits = if (bitsPerSample >= 24) "${bitsPerSample}bit" else ""
             val br = if (bitRateKbps > 0) "${bitRateKbps}kbps" else ""
-            return listOf(formatLabel, sr, br).filter { it.isNotBlank() }.joinToString(" · ")
+            return listOf(formatLabel, sr, bits, br).filter { it.isNotBlank() }.joinToString(" · ")
         }
 }
 
@@ -120,6 +121,26 @@ enum class DesktopLayoutDensity(
     SPACIOUS("宽松", 52, 16, 20, 22),
 }
 
+enum class DesktopFontStyle(val label: String) {
+    YAHEI("微软雅黑"),
+    SONGTI("宋体书卷"),
+    KAITI("楷体手书"),
+    CUSTOM("自定义字体"),
+}
+
+enum class DesktopLyricFontStyle(val label: String) {
+    SERIF("书卷衬线"),
+    SANS("清雅无衬线"),
+    KAITI("楷体手书"),
+    FOLLOW_APP("跟随全局"),
+}
+
+enum class DesktopFontWeightLevel(val label: String) {
+    LIGHT("纤细"),
+    STANDARD("标准"),
+    BOLD("厚重"),
+}
+
 enum class RepeatMode(val label: String) {
     OFF("顺序播放"),
     ALL("列表循环"),
@@ -151,6 +172,11 @@ data class DesktopConfig(
     val accentColor: DesktopAccentColor = DesktopAccentColor.CINNABAR,
     val layoutDensity: DesktopLayoutDensity = DesktopLayoutDensity.STANDARD,
     val fontScale: Float = 1.0f,
+    val appFontStyle: DesktopFontStyle = DesktopFontStyle.YAHEI,
+    val lyricFontStyle: DesktopLyricFontStyle = DesktopLyricFontStyle.SERIF,
+    val fontWeightLevel: DesktopFontWeightLevel = DesktopFontWeightLevel.STANDARD,
+    val customFontPath: String? = null,
+    val lyricFontScale: Float = 1.0f,
     val sceneStyle: DesktopSceneStyle = DesktopSceneStyle.VINYL_STUDY,
     val spectrumStyle: DesktopSpectrumStyle = DesktopSpectrumStyle.SILK_RIBBON,
     val favoritePaths: Set<String> = emptySet(),
@@ -161,6 +187,8 @@ data class DesktopConfig(
     val eqEnabled: Boolean = false,
     val eqBandsDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f),
     val lyricOffsetsMs: Map<String, Long> = emptyMap(),
+    val customCoverPaths: Map<String, String> = emptyMap(),
+    val customLyricPaths: Map<String, String> = emptyMap(),
     val volume: Float = 0.85f,
     val repeatMode: RepeatMode = RepeatMode.ALL,
     val shuffleEnabled: Boolean = false,

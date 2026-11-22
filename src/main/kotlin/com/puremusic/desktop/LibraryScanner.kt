@@ -10,10 +10,22 @@ import java.util.logging.Level
 import java.util.logging.Logger
 
 object DesktopLibraryScanner {
-    private val supportedExtensions = setOf("mp3", "flac", "wav", "aiff", "aif")
+    private val supportedExtensions = setOf(
+        "mp3", "flac", "wav", "aiff", "aif",
+        "m4a", "aac", "alac", "ogg", "opus",
+        "wma", "ape", "wv", "dsf", "dff",
+    )
+
+    @Volatile private var customCoverOverrides: Map<String, String> = emptyMap()
+    @Volatile private var customLyricOverrides: Map<String, String> = emptyMap()
 
     init {
         Logger.getLogger("org.jaudiotagger").level = Level.OFF
+    }
+
+    fun setCustomOverrides(covers: Map<String, String>, lyrics: Map<String, String>) {
+        customCoverOverrides = covers
+        customLyricOverrides = lyrics
     }
 
     fun scanFolders(folderPaths: List<String>): List<DesktopSong> {
@@ -44,10 +56,11 @@ object DesktopLibraryScanner {
         var title = file.nameWithoutExtension
         var artist = "未知歌手"
         var album = "未知专辑"
-        var durationMs = 210_000L
+        var durationMs = 0L
         var sampleRateHz = 44100
         var bitRateKbps = 0
         var bitsPerSample = 16
+        var taggerSucceeded = false
 
         runCatching {
             val audioFile = AudioFileIO.read(file)
@@ -60,6 +73,7 @@ object DesktopLibraryScanner {
                 if (br > 0) bitRateKbps = br
                 val bps = header.bitsPerSample
                 if (bps > 0) bitsPerSample = bps
+                taggerSucceeded = durationMs > 0L
             }
             val tag = audioFile.tag
             if (tag != null) {
@@ -68,6 +82,21 @@ object DesktopLibraryScanner {
                 tag.getFirst(FieldKey.ALBUM)?.trim()?.takeIf { it.isNotEmpty() }?.let { album = it }
             }
         }
+
+        // Fallback to bundled ffprobe for formats JAudiotagger doesn't parse (OPUS, APE, WV, DSF, WMA, etc.)
+        if (!taggerSucceeded || durationMs <= 0L) {
+            DesktopFfmpegLocator.probeMetadata(file)?.let { probed ->
+                if (probed.durationMs > 0L) durationMs = probed.durationMs
+                if (probed.sampleRateHz > 0) sampleRateHz = probed.sampleRateHz
+                if (probed.bitRateKbps > 0) bitRateKbps = probed.bitRateKbps
+                if (probed.bitsPerSample > 0) bitsPerSample = probed.bitsPerSample
+                if (title == file.nameWithoutExtension && !probed.title.isNullOrBlank()) title = probed.title
+                if (artist == "未知歌手" && !probed.artist.isNullOrBlank()) artist = probed.artist
+                if (album == "未知专辑" && !probed.album.isNullOrBlank()) album = probed.album
+            }
+        }
+
+        if (durationMs <= 0L) durationMs = 210_000L
 
         return DesktopSong(
             id = canonicalPath,
@@ -86,46 +115,73 @@ object DesktopLibraryScanner {
 
     fun loadArtwork(filePath: String): ByteArray? {
         return runCatching {
+            // 1. Check user-replaced custom cover first
+            customCoverOverrides[filePath]?.let { customPath ->
+                val cf = File(customPath)
+                if (cf.exists() && cf.length() in 256L..20_000_000L) {
+                    return cf.readBytes()
+                }
+            }
+
             val file = File(filePath)
             if (!file.exists()) return null
-            val audioFile = AudioFileIO.read(file)
-            val embedded = audioFile.tag?.firstArtwork?.binaryData
+
+            // 2. Embedded artwork via JAudiotagger
+            val embedded = runCatching {
+                AudioFileIO.read(file).tag?.firstArtwork?.binaryData
+            }.getOrNull()
             if (embedded != null && embedded.isNotEmpty()) return embedded
 
+            // 3. Same-folder cover image
             val dir = file.parentFile ?: return null
-            val candidates = listOf("cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg")
+            val candidates = listOf("cover.jpg", "cover.png", "cover.webp", "folder.jpg", "folder.png", "front.jpg")
             for (name in candidates) {
                 val f = File(dir, name)
-                if (f.exists() && f.length() in 1024L..10_000_000L) return f.readBytes()
+                if (f.exists() && f.length() in 1024L..12_000_000L) return f.readBytes()
             }
             null
         }.getOrNull()
     }
 
     fun loadLyricsForSong(song: DesktopSong): List<LyricLine> {
+        // 1. Check user-imported custom LRC file first
+        customLyricOverrides[song.filePath]?.let { customPath ->
+            val cf = File(customPath)
+            if (cf.exists() && cf.length() in 4L..1_024_000L) {
+                val parsed = parseLrcOrPlain(readTextAutoCharset(cf), song.durationMs)
+                if (parsed.isNotEmpty()) return parsed
+            }
+        }
+
+        // 2. Check sibling .lrc file
         val audioFile = File(song.filePath)
         val lrcFile = File(audioFile.parentFile, "${audioFile.nameWithoutExtension}.lrc")
-        if (lrcFile.exists() && lrcFile.length() in 4L..512_000L) {
-            val rawText = readTextAutoCharset(lrcFile)
-            val parsed = parseLrc(rawText)
+        if (lrcFile.exists() && lrcFile.length() in 4L..1_024_000L) {
+            val parsed = parseLrcOrPlain(readTextAutoCharset(lrcFile), song.durationMs)
             if (parsed.isNotEmpty()) return parsed
         }
+
+        // 3. Embedded tag lyrics
         val embeddedText = runCatching {
             AudioFileIO.read(audioFile).tag?.getFirst(FieldKey.LYRICS)?.trim()
         }.getOrNull()
         if (!embeddedText.isNullOrBlank()) {
-            val parsed = parseLrc(embeddedText)
+            val parsed = parseLrcOrPlain(embeddedText, song.durationMs)
             if (parsed.isNotEmpty()) return parsed
-            val plain = embeddedText.lines().map { it.trim() }.filter { it.isNotEmpty() }
-            if (plain.isNotEmpty()) {
-                val stepMs = (song.durationMs / plain.size.coerceAtLeast(1)).coerceAtLeast(2500L)
-                return plain.mapIndexed { idx, line ->
-                    val (p, s) = splitBilingualLyric(line)
-                    LyricLine(idx * stepMs, p, s)
-                }
-            }
         }
         return emptyList()
+    }
+
+    private fun parseLrcOrPlain(rawText: String, durationMs: Long): List<LyricLine> {
+        val parsed = parseLrc(rawText)
+        if (parsed.isNotEmpty()) return parsed
+        val plain = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        if (plain.isEmpty()) return emptyList()
+        val stepMs = (durationMs / plain.size.coerceAtLeast(1)).coerceAtLeast(2500L)
+        return plain.mapIndexed { idx, line ->
+            val (p, s) = splitBilingualLyric(line)
+            LyricLine(idx * stepMs, p, s)
+        }
     }
 
     private fun readTextAutoCharset(file: File): String {
@@ -190,6 +246,11 @@ object DesktopConfigStore {
         var accent = DesktopAccentColor.CINNABAR
         var density = DesktopLayoutDensity.STANDARD
         var fontScale = 1.0f
+        var appFontStyle = DesktopFontStyle.YAHEI
+        var lyricFontStyle = DesktopLyricFontStyle.SERIF
+        var fontWeightLevel = DesktopFontWeightLevel.STANDARD
+        var customFontPath: String? = null
+        var lyricFontScale = 1.0f
         var scene = DesktopSceneStyle.VINYL_STUDY
         var spectrum = DesktopSpectrumStyle.SILK_RIBBON
         var favs = emptySet<String>()
@@ -200,6 +261,8 @@ object DesktopConfigStore {
         var eqEnabled = false
         var eqBands = listOf(0f, 0f, 0f, 0f, 0f)
         val lyricOffsets = mutableMapOf<String, Long>()
+        val customCovers = mutableMapOf<String, String>()
+        val customLyrics = mutableMapOf<String, String>()
         var volume = 0.85f
         var repeatMode = RepeatMode.ALL
         var shuffleEnabled = false
@@ -218,7 +281,12 @@ object DesktopConfigStore {
                     "darkMode" -> darkMode = v.toBoolean()
                     "accent" -> accent = DesktopAccentColor.entries.firstOrNull { it.name == v } ?: DesktopAccentColor.CINNABAR
                     "density" -> density = DesktopLayoutDensity.entries.firstOrNull { it.name == v } ?: DesktopLayoutDensity.STANDARD
-                    "fontScale" -> fontScale = (v.toFloatOrNull() ?: 1.0f).coerceIn(0.85f, 1.25f)
+                    "fontScale" -> fontScale = (v.toFloatOrNull() ?: 1.0f).coerceIn(0.85f, 1.30f)
+                    "appFontStyle" -> appFontStyle = DesktopFontStyle.entries.firstOrNull { it.name == v } ?: DesktopFontStyle.YAHEI
+                    "lyricFontStyle" -> lyricFontStyle = DesktopLyricFontStyle.entries.firstOrNull { it.name == v } ?: DesktopLyricFontStyle.SERIF
+                    "fontWeightLevel" -> fontWeightLevel = DesktopFontWeightLevel.entries.firstOrNull { it.name == v } ?: DesktopFontWeightLevel.STANDARD
+                    "customFontPath" -> customFontPath = v.takeIf { it.isNotBlank() }
+                    "lyricFontScale" -> lyricFontScale = (v.toFloatOrNull() ?: 1.0f).coerceIn(0.75f, 1.45f)
                     "scene" -> scene = DesktopSceneStyle.entries.firstOrNull { it.name == v } ?: DesktopSceneStyle.VINYL_STUDY
                     "spectrum" -> spectrum = DesktopSpectrumStyle.entries.firstOrNull { it.name == v } ?: DesktopSpectrumStyle.SILK_RIBBON
                     "favorites" -> favs = v.split('|').filter { it.isNotBlank() }.toSet()
@@ -267,6 +335,22 @@ object DesktopConfigStore {
                             if (ms != 0L) lyricOffsets[path] = ms
                         }
                     }
+                    "customCover" -> {
+                        val sep = v.lastIndexOf("::")
+                        if (sep > 0) {
+                            val songPath = v.substring(0, sep)
+                            val imgPath = v.substring(sep + 2)
+                            if (songPath.isNotBlank() && imgPath.isNotBlank()) customCovers[songPath] = imgPath
+                        }
+                    }
+                    "customLyric" -> {
+                        val sep = v.lastIndexOf("::")
+                        if (sep > 0) {
+                            val songPath = v.substring(0, sep)
+                            val lrcPath = v.substring(sep + 2)
+                            if (songPath.isNotBlank() && lrcPath.isNotBlank()) customLyrics[songPath] = lrcPath
+                        }
+                    }
                 }
             }
         }
@@ -276,6 +360,11 @@ object DesktopConfigStore {
             accentColor = accent,
             layoutDensity = density,
             fontScale = fontScale,
+            appFontStyle = appFontStyle,
+            lyricFontStyle = lyricFontStyle,
+            fontWeightLevel = fontWeightLevel,
+            customFontPath = customFontPath,
+            lyricFontScale = lyricFontScale,
             sceneStyle = scene,
             spectrumStyle = spectrum,
             favoritePaths = favs,
@@ -286,6 +375,8 @@ object DesktopConfigStore {
             eqEnabled = eqEnabled,
             eqBandsDb = eqBands,
             lyricOffsetsMs = lyricOffsets,
+            customCoverPaths = customCovers,
+            customLyricPaths = customLyrics,
             volume = volume,
             repeatMode = repeatMode,
             shuffleEnabled = shuffleEnabled,
@@ -303,6 +394,11 @@ object DesktopConfigStore {
             sb.appendLine("accent=${cfg.accentColor.name}")
             sb.appendLine("density=${cfg.layoutDensity.name}")
             sb.appendLine("fontScale=${cfg.fontScale}")
+            sb.appendLine("appFontStyle=${cfg.appFontStyle.name}")
+            sb.appendLine("lyricFontStyle=${cfg.lyricFontStyle.name}")
+            sb.appendLine("fontWeightLevel=${cfg.fontWeightLevel.name}")
+            sb.appendLine("customFontPath=${cfg.customFontPath.orEmpty()}")
+            sb.appendLine("lyricFontScale=${cfg.lyricFontScale}")
             sb.appendLine("scene=${cfg.sceneStyle.name}")
             sb.appendLine("spectrum=${cfg.spectrumStyle.name}")
             sb.appendLine("favorites=${cfg.favoritePaths.joinToString("|")}")
@@ -325,6 +421,12 @@ object DesktopConfigStore {
             }
             cfg.lyricOffsetsMs.forEach { (path, ms) ->
                 if (ms != 0L) sb.appendLine("lyricOffset=$path::$ms")
+            }
+            cfg.customCoverPaths.forEach { (songPath, imgPath) ->
+                if (songPath.isNotBlank() && imgPath.isNotBlank()) sb.appendLine("customCover=$songPath::$imgPath")
+            }
+            cfg.customLyricPaths.forEach { (songPath, lrcPath) ->
+                if (songPath.isNotBlank() && lrcPath.isNotBlank()) sb.appendLine("customLyric=$songPath::$lrcPath")
             }
             configFile.writeText(sb.toString(), StandardCharsets.UTF_8)
         }

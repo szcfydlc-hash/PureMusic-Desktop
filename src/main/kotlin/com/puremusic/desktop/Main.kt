@@ -65,7 +65,7 @@ import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Minimize
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.Pause
@@ -99,6 +99,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -128,9 +129,11 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
@@ -150,6 +153,7 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.UUID
 import javax.swing.JFileChooser
+import javax.swing.filechooser.FileNameExtensionFilter
 import javax.swing.UIManager
 import kotlin.math.abs
 
@@ -166,7 +170,11 @@ private sealed interface DesktopDetailView {
 fun main() = application {
     runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
 
-    val initialConfig = remember { DesktopConfigStore.load() }
+    val initialConfig = remember {
+        DesktopConfigStore.load().also {
+            DesktopLibraryScanner.setCustomOverrides(it.customCoverPaths, it.customLyricPaths)
+        }
+    }
     var config by remember { mutableStateOf(initialConfig) }
 
     var allSongs by remember { mutableStateOf<List<DesktopSong>>(emptyList()) }
@@ -207,7 +215,24 @@ fun main() = application {
     fun updateConfig(transform: (DesktopConfig) -> DesktopConfig) {
         val updated = transform(config)
         config = updated
+        DesktopLibraryScanner.setCustomOverrides(updated.customCoverPaths, updated.customLyricPaths)
         scope.launch(Dispatchers.IO) { DesktopConfigStore.save(updated) }
+    }
+
+    fun pickSingleFile(dialogTitle: String, filterDesc: String, vararg exts: String): String? {
+        return runCatching {
+            val chooser = JFileChooser().apply {
+                this.dialogTitle = dialogTitle
+                fileSelectionMode = JFileChooser.FILES_ONLY
+                isAcceptAllFileFilterUsed = true
+                if (exts.isNotEmpty()) {
+                    fileFilter = FileNameExtensionFilter(filterDesc, *exts)
+                }
+            }
+            if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                chooser.selectedFile?.absolutePath
+            } else null
+        }.getOrNull()
     }
 
     lateinit var engine: DesktopAudioEngine
@@ -451,21 +476,36 @@ fun main() = application {
         )
     }
 
-    val scale = config.fontScale.coerceIn(0.85f, 1.25f)
-    val uiSans = DesktopTypographyFamilies.uiSans
+    val scale = config.fontScale.coerceIn(0.85f, 1.30f)
+    val appFont = remember(config.appFontStyle, config.customFontPath) {
+        DesktopTypographyFamilies.resolveAppFont(config.appFontStyle, config.customFontPath)
+    }
+    val lyricFont = remember(config.lyricFontStyle, config.appFontStyle, config.customFontPath) {
+        DesktopTypographyFamilies.resolveLyricFont(config.lyricFontStyle, config.appFontStyle, config.customFontPath)
+    }
+    val bodyWeight = when (config.fontWeightLevel) {
+        DesktopFontWeightLevel.LIGHT -> FontWeight.Light
+        DesktopFontWeightLevel.STANDARD -> FontWeight.Normal
+        DesktopFontWeightLevel.BOLD -> FontWeight.Medium
+    }
+    val titleWeight = when (config.fontWeightLevel) {
+        DesktopFontWeightLevel.LIGHT -> FontWeight.Normal
+        DesktopFontWeightLevel.STANDARD -> FontWeight.SemiBold
+        DesktopFontWeightLevel.BOLD -> FontWeight.Bold
+    }
     val baseTypo = Typography()
     val scaledTypo = Typography(
-        headlineMedium = baseTypo.headlineMedium.copy(fontFamily = uiSans, fontSize = baseTypo.headlineMedium.fontSize * scale),
-        headlineSmall = baseTypo.headlineSmall.copy(fontFamily = uiSans, fontSize = baseTypo.headlineSmall.fontSize * scale),
-        titleLarge = baseTypo.titleLarge.copy(fontFamily = uiSans, fontSize = baseTypo.titleLarge.fontSize * scale),
-        titleMedium = baseTypo.titleMedium.copy(fontFamily = uiSans, fontSize = baseTypo.titleMedium.fontSize * scale),
-        titleSmall = baseTypo.titleSmall.copy(fontFamily = uiSans, fontSize = baseTypo.titleSmall.fontSize * scale),
-        bodyLarge = baseTypo.bodyLarge.copy(fontFamily = uiSans, fontSize = baseTypo.bodyLarge.fontSize * scale),
-        bodyMedium = baseTypo.bodyMedium.copy(fontFamily = uiSans, fontSize = baseTypo.bodyMedium.fontSize * scale),
-        bodySmall = baseTypo.bodySmall.copy(fontFamily = uiSans, fontSize = baseTypo.bodySmall.fontSize * scale),
-        labelLarge = baseTypo.labelLarge.copy(fontFamily = uiSans, fontSize = baseTypo.labelLarge.fontSize * scale),
-        labelMedium = baseTypo.labelMedium.copy(fontFamily = uiSans, fontSize = baseTypo.labelMedium.fontSize * scale),
-        labelSmall = baseTypo.labelSmall.copy(fontFamily = uiSans, fontSize = baseTypo.labelSmall.fontSize * scale),
+        headlineMedium = baseTypo.headlineMedium.copy(fontFamily = appFont, fontWeight = titleWeight),
+        headlineSmall = baseTypo.headlineSmall.copy(fontFamily = appFont, fontWeight = titleWeight),
+        titleLarge = baseTypo.titleLarge.copy(fontFamily = appFont, fontWeight = titleWeight),
+        titleMedium = baseTypo.titleMedium.copy(fontFamily = appFont, fontWeight = titleWeight),
+        titleSmall = baseTypo.titleSmall.copy(fontFamily = appFont, fontWeight = titleWeight),
+        bodyLarge = baseTypo.bodyLarge.copy(fontFamily = appFont, fontWeight = bodyWeight),
+        bodyMedium = baseTypo.bodyMedium.copy(fontFamily = appFont, fontWeight = bodyWeight),
+        bodySmall = baseTypo.bodySmall.copy(fontFamily = appFont, fontWeight = bodyWeight),
+        labelLarge = baseTypo.labelLarge.copy(fontFamily = appFont, fontWeight = bodyWeight),
+        labelMedium = baseTypo.labelMedium.copy(fontFamily = appFont, fontWeight = bodyWeight),
+        labelSmall = baseTypo.labelSmall.copy(fontFamily = appFont, fontWeight = bodyWeight),
     )
 
     val mainWindowState = rememberWindowState(
@@ -532,6 +572,11 @@ fun main() = application {
             } else false
         },
     ) {
+        val baseDensity = LocalDensity.current
+        CompositionLocalProvider(
+            LocalDensity provides Density(baseDensity.density, fontScale = baseDensity.fontScale * scale),
+            LocalLyricFontFamily provides lyricFont,
+        ) {
         MaterialTheme(colorScheme = colorScheme, typography = scaledTypo) {
             val currentLyricOffset = playerState.currentSong?.filePath?.let { config.lyricOffsetsMs[it] } ?: 0L
             val effectivePosMs = (playerState.positionMs + currentLyricOffset).coerceAtLeast(0L)
@@ -610,7 +655,7 @@ fun main() = application {
                                     onClick = { mainWindowState.isMinimized = true },
                                     modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand),
                                 ) {
-                                    Icon(Icons.Rounded.Minimize, contentDescription = "最小化", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                                    Icon(Icons.Rounded.Remove, contentDescription = "最小化", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                                 }
                                 IconButton(
                                     onClick = {
@@ -822,6 +867,15 @@ fun main() = application {
                                         onSelectAccent = { ac -> updateConfig { it.copy(accentColor = ac) } },
                                         onSelectDensity = { dn -> updateConfig { it.copy(layoutDensity = dn) } },
                                         onFontScaleChange = { sc -> updateConfig { it.copy(fontScale = sc) } },
+                                        onSelectAppFont = { f -> updateConfig { it.copy(appFontStyle = f) } },
+                                        onSelectLyricFont = { lf -> updateConfig { it.copy(lyricFontStyle = lf) } },
+                                        onSelectFontWeight = { fw -> updateConfig { it.copy(fontWeightLevel = fw) } },
+                                        onPickCustomFont = {
+                                            val chosen = pickSingleFile("选择本地字体文件", "字体文件 (*.ttf, *.otf, *.ttc)", "ttf", "otf", "ttc")
+                                            if (chosen != null) {
+                                                updateConfig { it.copy(appFontStyle = DesktopFontStyle.CUSTOM, customFontPath = chosen) }
+                                            }
+                                        },
                                         onSetSleepTimerMin = { mins -> sleepTimerRemainingSec = if (mins <= 0) null else mins * 60 },
                                         onAddFolder = { pickAndAddFolder() },
                                         onRemoveFolder = { path ->
@@ -910,6 +964,7 @@ fun main() = application {
                             spectrumStyle = config.spectrumStyle,
                             showSpectrum = showSpectrumInImmersive,
                             lyricOffsetMs = currentLyricOffset,
+                            lyricFontScale = config.lyricFontScale,
                             isDarkTheme = config.darkMode,
                             accentColor = MaterialTheme.colorScheme.primary,
                             isFullscreen = mainWindowState.placement == WindowPlacement.Fullscreen,
@@ -930,6 +985,36 @@ fun main() = application {
                                 updateConfig { cfg ->
                                     val next = cfg.lyricOffsetsMs.toMutableMap().apply { remove(song.filePath) }
                                     cfg.copy(lyricOffsetsMs = next)
+                                }
+                            },
+                            onAdjustLyricScale = { delta ->
+                                updateConfig { cfg ->
+                                    cfg.copy(lyricFontScale = (cfg.lyricFontScale + delta).coerceIn(0.75f, 1.45f))
+                                }
+                            },
+                            onResetLyricScale = {
+                                updateConfig { it.copy(lyricFontScale = 1.0f) }
+                            },
+                            onImportLyrics = {
+                                val chosen = pickSingleFile("导入本地歌词文件", "歌词文件 (*.lrc, *.txt)", "lrc", "txt")
+                                if (chosen != null) {
+                                    updateConfig { cfg ->
+                                        val next = cfg.customLyricPaths.toMutableMap().apply { put(song.filePath, chosen) }
+                                        cfg.copy(customLyricPaths = next)
+                                    }
+                                    scope.launch(Dispatchers.IO) {
+                                        currentLyrics = DesktopLibraryScanner.loadLyricsForSong(song)
+                                    }
+                                }
+                            },
+                            onReplaceCover = {
+                                val chosen = pickSingleFile("替换当前歌曲专辑封面", "图片文件 (*.jpg, *.jpeg, *.png, *.webp)", "jpg", "jpeg", "png", "webp")
+                                if (chosen != null) {
+                                    updateConfig { cfg ->
+                                        val next = cfg.customCoverPaths.toMutableMap().apply { put(song.filePath, chosen) }
+                                        cfg.copy(customCoverPaths = next)
+                                    }
+                                    ArtworkMemoryCache.invalidate(song.filePath)
                                 }
                             },
                             onClose = { showImmersiveStage = false },
@@ -1165,6 +1250,7 @@ fun main() = application {
                 )
             }
         }
+        }
     }
 
     // Independent Always-On-Top Draggable Mini Vinyl Floating Window
@@ -1385,17 +1471,22 @@ private fun UnifiedBottomControlRail(
                     modifier = Modifier.width(88.dp).padding(horizontal = 6.dp),
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "EQ",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (eqActive) accentColor else muted,
+                Box(
                     modifier = Modifier
+                        .size(32.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .pointerHoverIcon(PointerIcon.Hand)
-                        .clickable(onClick = onToggleEq)
-                        .padding(horizontal = 7.dp, vertical = 5.dp),
-                )
+                        .clickable(onClick = onToggleEq),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "EQ",
+                        fontSize = 11.5.sp,
+                        lineHeight = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (eqActive) accentColor else muted,
+                    )
+                }
                 IconButton(onClick = onToggleQueue, modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand)) {
                     Icon(Icons.Rounded.QueueMusic, contentDescription = "播放队列", tint = if (queueOpen) accentColor else muted, modifier = Modifier.size(18.dp))
                 }
@@ -2328,6 +2419,10 @@ private fun DesktopSettingsPage(
     onSelectAccent: (DesktopAccentColor) -> Unit,
     onSelectDensity: (DesktopLayoutDensity) -> Unit,
     onFontScaleChange: (Float) -> Unit,
+    onSelectAppFont: (DesktopFontStyle) -> Unit,
+    onSelectLyricFont: (DesktopLyricFontStyle) -> Unit,
+    onSelectFontWeight: (DesktopFontWeightLevel) -> Unit,
+    onPickCustomFont: () -> Unit,
     onSetSleepTimerMin: (Int) -> Unit,
     onAddFolder: () -> Unit,
     onRemoveFolder: (String) -> Unit,
@@ -2397,7 +2492,7 @@ private fun DesktopSettingsPage(
                                 fontSize = 12.sp,
                                 color = muted,
                                 modifier = Modifier.border(0.6.dp, outline, RoundedCornerShape(8.dp)).pointerHoverIcon(PointerIcon.Hand).clickable {
-                                    onToggleDarkMode(false); onSelectAccent(DesktopAccentColor.CINNABAR); onSelectDensity(DesktopLayoutDensity.STANDARD); onFontScaleChange(1.0f)
+                                    onToggleDarkMode(false); onSelectAccent(DesktopAccentColor.CINNABAR); onSelectDensity(DesktopLayoutDensity.STANDARD); onFontScaleChange(1.0f); onSelectAppFont(DesktopFontStyle.YAHEI); onSelectLyricFont(DesktopLyricFontStyle.SERIF); onSelectFontWeight(DesktopFontWeightLevel.STANDARD)
                                 }.padding(horizontal = 12.dp, vertical = 6.dp),
                             )
                         }
@@ -2408,7 +2503,7 @@ private fun DesktopSettingsPage(
                             Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                 Text("简约音乐 · 外观预览", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = accent)
                                 Text("把喜欢的音乐，留在身边。", style = MaterialTheme.typography.bodyMedium, color = ink)
-                                Text("让晚风陪着音乐", fontSize = 24.sp, fontFamily = DesktopTypographyFamilies.editorialSerif, fontWeight = FontWeight.Bold, color = ink)
+                                Text("让晚风陪着音乐", fontSize = 24.sp, fontFamily = LocalLyricFontFamily.current, fontWeight = FontWeight.Bold, color = ink)
                                 Text("Simple moments, beautiful music.", fontSize = 12.sp, color = muted)
                             }
                         }
@@ -2492,13 +2587,117 @@ private fun DesktopSettingsPage(
 
                         HorizontalDivider(thickness = 0.5.dp, color = outline)
 
-                        // Font Scale
+                        // Font Scale (Global LocalDensity.fontScale)
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(modifier = Modifier.width(200.dp)) {
                                 Text("全局字号缩放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
-                                Text("${(config.fontScale * 100).toInt()}%", fontSize = 12.sp, color = accent)
+                                Text("${(config.fontScale * 100).toInt()}%（全界面实时生效）", fontSize = 12.sp, color = accent)
                             }
-                            DesktopSleekSlider(value = config.fontScale, onValueChange = onFontScaleChange, valueRange = 0.85f..1.25f, activeColor = accent, modifier = Modifier.weight(1f))
+                            DesktopSleekSlider(value = config.fontScale, onValueChange = onFontScaleChange, valueRange = 0.85f..1.30f, activeColor = accent, modifier = Modifier.weight(1f))
+                        }
+
+                        HorizontalDivider(thickness = 0.5.dp, color = outline)
+
+                        // App Font Family
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("全局界面字体", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text(
+                                    text = if (config.appFontStyle == DesktopFontStyle.CUSTOM && !config.customFontPath.isNullOrBlank()) {
+                                        "当前自定义：${File(config.customFontPath).name}"
+                                    } else {
+                                        "切换微软雅黑、宋体书卷、楷体手书或导入本地字体。"
+                                    },
+                                    fontSize = 12.sp,
+                                    color = muted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(DesktopFontStyle.YAHEI, DesktopFontStyle.SONGTI, DesktopFontStyle.KAITI).forEach { fs ->
+                                    val sel = config.appFontStyle == fs
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
+                                            .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
+                                            .pointerHoverIcon(PointerIcon.Hand)
+                                            .clickable { onSelectAppFont(fs) }
+                                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(fs.label, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
+                                    }
+                                }
+                                val customSel = config.appFontStyle == DesktopFontStyle.CUSTOM
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (customSel) accent.copy(alpha = 0.12f) else Color.Transparent)
+                                        .border(0.6.dp, if (customSel) accent else outline, RoundedCornerShape(8.dp))
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable { onPickCustomFont() }
+                                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text("导入字体", fontSize = 12.sp, color = if (customSel) accent else muted, fontWeight = if (customSel) FontWeight.SemiBold else FontWeight.Normal)
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(thickness = 0.5.dp, color = outline)
+
+                        // Lyric Font Family
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("独立歌词字体", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("为沉浸歌词单独指定书卷衬线或手书字体。", fontSize = 12.sp, color = muted)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                DesktopLyricFontStyle.entries.forEach { lfs ->
+                                    val sel = config.lyricFontStyle == lfs
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
+                                            .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
+                                            .pointerHoverIcon(PointerIcon.Hand)
+                                            .clickable { onSelectLyricFont(lfs) }
+                                            .padding(horizontal = 11.dp, vertical = 7.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(lfs.label, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(thickness = 0.5.dp, color = outline)
+
+                        // Font Weight
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("字重风格", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("微调正文与标题的笔划粗细。", fontSize = 12.sp, color = muted)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                DesktopFontWeightLevel.entries.forEach { fw ->
+                                    val sel = config.fontWeightLevel == fw
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (sel) accent.copy(alpha = 0.12f) else Color.Transparent)
+                                            .border(0.6.dp, if (sel) accent else outline, RoundedCornerShape(8.dp))
+                                            .pointerHoverIcon(PointerIcon.Hand)
+                                            .clickable { onSelectFontWeight(fw) }
+                                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(fw.label, fontSize = 12.sp, color = if (sel) accent else muted, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -2508,7 +2707,7 @@ private fun DesktopSettingsPage(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column {
                                 Text("本地音乐文件夹", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
-                                Text("支持 MP3 / FLAC / WAV / AIFF 及内嵌或同目录 LRC 歌词。", fontSize = 12.sp, color = muted)
+                                Text("内置 FFmpeg 全格式解码，支持 MP3 / FLAC (含 24-bit Hi-Res) / WAV / M4A / AAC / ALAC / OGG / OPUS / WMA / APE / AIFF / DSF。", fontSize = 12.sp, color = muted)
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 TextButton(onClick = onRescan) { Text("重新扫描", fontSize = 12.sp) }
@@ -2563,7 +2762,7 @@ private fun DesktopSettingsPage(
                             Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
                             Text("回归音乐本身。纯粹、克制、安静陪伴每一张本地唱片。", fontSize = 12.sp, color = muted)
                         }
-                        Text("v3.0.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                        Text("v3.1.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
                     }
                 }
             }
@@ -2652,6 +2851,7 @@ private fun UnifiedImmersiveStage(
     spectrumStyle: DesktopSpectrumStyle,
     showSpectrum: Boolean,
     lyricOffsetMs: Long,
+    lyricFontScale: Float,
     isDarkTheme: Boolean,
     accentColor: Color,
     isFullscreen: Boolean,
@@ -2662,6 +2862,10 @@ private fun UnifiedImmersiveStage(
     onToggleSpectrum: () -> Unit,
     onAdjustLyricOffset: (Long) -> Unit,
     onResetLyricOffset: () -> Unit,
+    onAdjustLyricScale: (Float) -> Unit,
+    onResetLyricScale: () -> Unit,
+    onImportLyrics: () -> Unit,
+    onReplaceCover: () -> Unit,
     onClose: () -> Unit,
     onToggleFullscreen: () -> Unit,
     onSelectSong: (DesktopSong) -> Unit,
@@ -2757,12 +2961,17 @@ private fun UnifiedImmersiveStage(
                             currentScene = sceneStyle,
                             currentSpectrum = spectrumStyle,
                             lyricOffsetMs = lyricOffsetMs,
+                            lyricFontScale = lyricFontScale,
                             accentColor = accentColor,
                             onDismiss = { menuExpanded = false },
                             onSelectScene = onSelectScene,
                             onSelectSpectrum = onSelectSpectrum,
                             onAdjustLyricOffset = onAdjustLyricOffset,
                             onResetLyricOffset = onResetLyricOffset,
+                            onAdjustLyricScale = onAdjustLyricScale,
+                            onResetLyricScale = onResetLyricScale,
+                            onImportLyrics = onImportLyrics,
+                            onReplaceCover = onReplaceCover,
                         )
                     }
 
@@ -2798,6 +3007,8 @@ private fun UnifiedImmersiveStage(
                         val sleeveSize = min(maxHeight * 0.64f, stageW * 0.34f).coerceIn(220.dp, 500.dp)
                         val discSize = sleeveSize * 0.90f
                         val lyricSp = (maxHeight.value * 0.064f).coerceIn(30f, 56f)
+                        val titleSp = (sleeveSize.value * 0.056f).coerceIn(16f, 26f)
+                        val stampScale = (sleeveSize.value / 280f).coerceIn(1.0f, 1.35f)
                         Row(
                             modifier = Modifier.width(stageW).fillMaxHeight().padding(horizontal = 24.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -2821,10 +3032,10 @@ private fun UnifiedImmersiveStage(
                                         DesktopAlbumCover(filePath = song.filePath, modifier = Modifier.fillMaxSize(), cornerRadius = 2.dp, iconSize = 48.dp)
                                     }
                                 }
-                                Spacer(modifier = Modifier.height(18.dp))
-                                Text("${song.title}  -  ${song.artist}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Spacer(modifier = Modifier.height(6.dp))
-                                DesktopAudioSpecStamp(song = song, isDarkSurface = isDarkScene, accentColor = activeAccent)
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Text("${song.title}  -  ${song.artist}", fontSize = titleSp.sp, fontWeight = FontWeight.SemiBold, color = primaryInk, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                DesktopAudioSpecStamp(song = song, isDarkSurface = isDarkScene, accentColor = activeAccent, scale = stampScale)
                             }
 
                             DesktopEditorialLyrics(
@@ -2839,6 +3050,7 @@ private fun UnifiedImmersiveStage(
                                 highlightAccent = true,
                                 useEditorialSerif = true,
                                 maxActiveSp = lyricSp,
+                                lyricFontScale = lyricFontScale,
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -2851,6 +3063,9 @@ private fun UnifiedImmersiveStage(
                         val stageW = (maxHeight * 1.80f).coerceAtMost(maxWidth)
                         val giantDisc = min(maxHeight * 0.78f, stageW * 0.44f).coerceIn(260.dp, 620.dp)
                         val lyricSp = (maxHeight.value * 0.058f).coerceIn(28f, 52f)
+                        val titleSp = (maxHeight.value * 0.042f).coerceIn(22f, 36f)
+                        val artistSp = (maxHeight.value * 0.024f).coerceIn(14f, 20f)
+                        val stampScale = (maxHeight.value / 700f).coerceIn(1.0f, 1.35f)
                         Row(
                             modifier = Modifier.width(stageW).fillMaxHeight().padding(horizontal = 24.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -2863,11 +3078,11 @@ private fun UnifiedImmersiveStage(
                                 }
                             }
                             Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                                Text(song.title, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = primaryInk, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = secondaryInk, textAlign = TextAlign.Center, maxLines = 1)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent)
+                                Text(song.title, fontSize = titleSp.sp, fontWeight = FontWeight.Bold, color = primaryInk, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(song.artist, fontSize = artistSp.sp, color = secondaryInk, textAlign = TextAlign.Center, maxLines = 1)
+                                Spacer(modifier = Modifier.height(10.dp))
+                                DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent, scale = stampScale)
                                 Spacer(modifier = Modifier.height(28.dp))
                                 DesktopEditorialLyrics(
                                     lyrics = lyrics,
@@ -2880,6 +3095,7 @@ private fun UnifiedImmersiveStage(
                                     textAlign = TextAlign.Center,
                                     useEditorialSerif = true,
                                     maxActiveSp = lyricSp,
+                                    lyricFontScale = lyricFontScale,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                             }
@@ -2889,34 +3105,41 @@ private fun UnifiedImmersiveStage(
 
                 // 3. 空间唱片廊
                 DesktopSceneStyle.SPATIAL_GALLERY -> {
-                    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                        DesktopSpatialRecordGallery(
-                            currentSong = song,
-                            allSongs = allSongs,
-                            onTogglePlayPause = onTogglePlayPause,
-                            onSkipPrevious = onSkipPrevious,
-                            onSkipNext = onSkipNext,
-                            modifier = Modifier.weight(1.3f).fillMaxWidth(),
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(song.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = secondaryInk, maxLines = 1)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent)
-                        Spacer(modifier = Modifier.height(10.dp))
-                        DesktopEditorialLyrics(
-                            lyrics = lyrics,
-                            activeIdx = activeLyricIdx,
-                            activeColor = primaryInk,
-                            accentColor = activeAccent,
-                            secondaryColor = secondaryInk,
-                            mutedColor = secondaryInk,
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            textAlign = TextAlign.Center,
-                            useEditorialSerif = true,
-                            maxActiveSp = 30f,
-                            modifier = Modifier.fillMaxWidth(0.72f),
-                        )
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val titleSp = (maxHeight.value * 0.036f).coerceIn(20f, 32f)
+                        val artistSp = (maxHeight.value * 0.022f).coerceIn(13.5f, 19f)
+                        val stampScale = (maxHeight.value / 700f).coerceIn(1.0f, 1.32f)
+                        val lyricSp = (maxHeight.value * 0.044f).coerceIn(26f, 40f)
+                        Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                            DesktopSpatialRecordGallery(
+                                currentSong = song,
+                                allSongs = allSongs,
+                                onTogglePlayPause = onTogglePlayPause,
+                                onSkipPrevious = onSkipPrevious,
+                                onSkipNext = onSkipNext,
+                                modifier = Modifier.weight(1.3f).fillMaxWidth(),
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(song.title, fontSize = titleSp.sp, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(song.artist, fontSize = artistSp.sp, color = secondaryInk, maxLines = 1)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent, scale = stampScale)
+                            Spacer(modifier = Modifier.height(12.dp))
+                            DesktopEditorialLyrics(
+                                lyrics = lyrics,
+                                activeIdx = activeLyricIdx,
+                                activeColor = primaryInk,
+                                accentColor = activeAccent,
+                                secondaryColor = secondaryInk,
+                                mutedColor = secondaryInk,
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                textAlign = TextAlign.Center,
+                                useEditorialSerif = true,
+                                maxActiveSp = lyricSp,
+                                lyricFontScale = lyricFontScale,
+                                modifier = Modifier.fillMaxWidth(0.76f),
+                            )
+                        }
                     }
                 }
 
@@ -2929,6 +3152,7 @@ private fun UnifiedImmersiveStage(
                         lyrics = lyrics,
                         activeLyricIdx = activeLyricIdx,
                         accentColor = activeAccent,
+                        lyricFontScale = lyricFontScale,
                         onSelectSong = onSelectSong,
                         onTogglePlayPause = onTogglePlayPause,
                         modifier = Modifier.fillMaxSize(),

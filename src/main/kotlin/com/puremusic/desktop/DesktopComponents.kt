@@ -61,7 +61,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -115,6 +117,9 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 object ArtworkMemoryCache {
+    var revision by mutableIntStateOf(0)
+        private set
+
     private val map = object : LinkedHashMap<String, ImageBitmap?>(96, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap?>?): Boolean = size > 140
     }
@@ -128,14 +133,23 @@ object ArtworkMemoryCache {
 
     @Synchronized fun getColor(key: String): Color? = colorMap[key]
     @Synchronized fun putColor(key: String, c: Color) { colorMap[key] = c }
+
+    fun invalidate(key: String) {
+        synchronized(this) {
+            map.remove(key)
+            colorMap.remove(key)
+        }
+        revision++
+    }
 }
 
 @Composable
 fun rememberSongArtwork(filePath: String?): ImageBitmap? {
-    var bitmap by remember(filePath) {
+    val rev = ArtworkMemoryCache.revision
+    var bitmap by remember(filePath, rev) {
         mutableStateOf(if (filePath != null && ArtworkMemoryCache.contains(filePath)) ArtworkMemoryCache.get(filePath) else null)
     }
-    LaunchedEffect(filePath) {
+    LaunchedEffect(filePath, rev) {
         if (filePath == null) {
             bitmap = null
             return@LaunchedEffect
@@ -308,29 +322,34 @@ fun DesktopAudioSpecStamp(
     song: DesktopSong,
     isDarkSurface: Boolean,
     accentColor: Color,
+    scale: Float = 1f,
     modifier: Modifier = Modifier,
 ) {
+    val s = scale.coerceIn(0.9f, 1.45f)
     val hiResBg = if (isDarkSurface) Color(0xFFE6C896).copy(alpha = 0.18f) else accentColor.copy(alpha = 0.12f)
     val hiResInk = if (isDarkSurface) Color(0xFFE6C896) else accentColor
     val specBorder = if (isDarkSurface) Color.White.copy(alpha = 0.22f) else MaterialTheme.colorScheme.outline
     val specInk = if (isDarkSurface) Color(0xFFD5CFC6) else MaterialTheme.colorScheme.onSurfaceVariant
+    val badgeShape = RoundedCornerShape((5f * s).dp)
 
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy((6f * s).dp),
     ) {
         if (song.isHiRes || song.isLossless) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(5.dp))
+                    .clip(badgeShape)
                     .background(hiResBg)
-                    .border(0.7.dp, hiResInk.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                    .border(0.75.dp, hiResInk.copy(alpha = 0.55f), badgeShape)
+                    .padding(horizontal = (7f * s).dp, vertical = (3f * s).dp),
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = if (song.isHiRes) "Hi-Res" else "SQ",
-                    fontSize = 10.sp,
+                    fontSize = (10.5f * s).sp,
+                    lineHeight = (12f * s).sp,
                     fontWeight = FontWeight.Bold,
                     color = hiResInk,
                     letterSpacing = 0.4.sp,
@@ -340,13 +359,15 @@ fun DesktopAudioSpecStamp(
         if (song.audioSpecText.isNotBlank()) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(5.dp))
-                    .border(0.7.dp, specBorder, RoundedCornerShape(5.dp))
-                    .padding(horizontal = 7.dp, vertical = 2.dp),
+                    .clip(badgeShape)
+                    .border(0.75.dp, specBorder, badgeShape)
+                    .padding(horizontal = (8f * s).dp, vertical = (3f * s).dp),
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = song.audioSpecText,
-                    fontSize = 10.sp,
+                    fontSize = (10.5f * s).sp,
+                    lineHeight = (12f * s).sp,
                     fontWeight = FontWeight.Medium,
                     color = specInk,
                     letterSpacing = 0.3.sp,
@@ -796,6 +817,7 @@ fun DesktopEditorialLyrics(
     highlightAccent: Boolean = false,
     useEditorialSerif: Boolean = true,
     maxActiveSp: Float = 48f,
+    lyricFontScale: Float = 1f,
     modifier: Modifier = Modifier,
 ) {
     val activeLine = if (activeIdx in lyrics.indices) lyrics[activeIdx] else null
@@ -816,40 +838,42 @@ fun DesktopEditorialLyrics(
         }
     }
 
-    val dynamicSp = remember(activePrimary, maxActiveSp) {
-        when {
+    val lScale = lyricFontScale.coerceIn(0.75f, 1.45f)
+    val dynamicSp = remember(activePrimary, maxActiveSp, lScale) {
+        val base = when {
             activePrimary.length <= 16 -> maxActiveSp
-            activePrimary.length <= 28 -> (maxActiveSp * 0.84f).coerceAtLeast(30f)
-            activePrimary.length <= 44 -> (maxActiveSp * 0.68f).coerceAtLeast(25f)
-            else -> (maxActiveSp * 0.56f).coerceAtLeast(21f)
+            activePrimary.length <= 28 -> (maxActiveSp * 0.84f).coerceAtLeast(28f)
+            activePrimary.length <= 44 -> (maxActiveSp * 0.68f).coerceAtLeast(24f)
+            else -> (maxActiveSp * 0.56f).coerceAtLeast(20f)
         }
+        (base * lScale).coerceIn(16f, 72f)
     }
-    val family = if (useEditorialSerif) DesktopTypographyFamilies.editorialSerif else DesktopTypographyFamilies.uiSans
+    val family = if (useEditorialSerif) LocalLyricFontFamily.current else DesktopTypographyFamilies.uiSans
 
     Column(modifier = modifier, horizontalAlignment = horizontalAlignment, verticalArrangement = Arrangement.Center) {
         if (lyrics.isEmpty()) {
-            Text("纯粹聆听 · 静享此刻", fontSize = 22.sp, fontFamily = family, fontWeight = FontWeight.Medium, color = mutedColor, textAlign = textAlign)
+            Text("纯粹聆听 · 静享此刻", fontSize = (22f * lScale).sp, fontFamily = family, fontWeight = FontWeight.Medium, color = mutedColor, textAlign = textAlign)
             return@Column
         }
         if (prevText.isNotBlank()) {
-            Text(prevText, fontSize = 15.sp, fontFamily = family, color = mutedColor.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
+            Text(prevText, fontSize = (15.5f * lScale).sp, lineHeight = (22f * lScale).sp, fontFamily = family, color = mutedColor.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
             Spacer(modifier = Modifier.height(12.dp))
         }
         Text(
             text = activePrimary,
             fontSize = dynamicSp.sp,
-            lineHeight = (dynamicSp * 1.22f).sp,
+            lineHeight = (dynamicSp * 1.24f).sp,
             fontFamily = family,
             fontWeight = FontWeight.Bold,
             color = if (highlightAccent) accentColor else activeColor,
             textAlign = textAlign,
-            maxLines = 3,
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth(),
         )
         if (subText.isNotBlank()) {
             Spacer(modifier = Modifier.height(14.dp))
-            Text(subText, fontSize = 18.sp, lineHeight = 26.sp, fontFamily = family, color = secondaryColor.copy(alpha = 0.86f), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
+            Text(subText, fontSize = (18f * lScale).sp, lineHeight = (26f * lScale).sp, fontFamily = family, color = secondaryColor.copy(alpha = 0.86f), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
         }
     }
 }
@@ -865,20 +889,34 @@ fun DesktopPosterWallStage(
     lyrics: List<LyricLine>,
     activeLyricIdx: Int,
     accentColor: Color,
+    lyricFontScale: Float = 1f,
     onSelectSong: (DesktopSong) -> Unit,
     onTogglePlayPause: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val activeLine = if (activeLyricIdx in lyrics.indices) lyrics[activeLyricIdx] else null
-    val activeText = remember(activeLine) {
-        if (activeLine == null) "" else splitBilingualLyric(activeLine.primaryText, activeLine.secondaryText).first
+    val nextLine = if (activeLyricIdx >= 0 && activeLyricIdx + 1 in lyrics.indices) lyrics[activeLyricIdx + 1] else null
+    val (activePrimary, activeSecondary) = remember(activeLine) {
+        if (activeLine == null) "" to null else splitBilingualLyric(activeLine.primaryText, activeLine.secondaryText)
     }
+    val subLyricText = remember(activeSecondary, nextLine) {
+        when {
+            !activeSecondary.isNullOrBlank() -> activeSecondary
+            nextLine != null -> splitBilingualLyric(nextLine.primaryText, nextLine.secondaryText).first
+            else -> ""
+        }
+    }
+    val lyricFamily = LocalLyricFontFamily.current
+    val lScale = lyricFontScale.coerceIn(0.75f, 1.45f)
 
     BoxWithConstraints(modifier = modifier.fillMaxSize().clip(RectangleShape)) {
-        val discSize = min(maxHeight * 0.78f, maxWidth * 0.44f).coerceIn(240.dp, 680.dp)
-        val lyricSp = (maxHeight.value * 0.044f).coerceIn(20f, 38f)
-        val titleSp = (maxHeight.value * 0.030f).coerceIn(14f, 24f)
-        // Compute strict 1:1 square tile grid so album covers NEVER stretch or squash!
+        val discSize = min(maxHeight * 0.56f, maxWidth * 0.36f).coerceIn(190.dp, 520.dp)
+        val titleSp = (maxHeight.value * 0.032f).coerceIn(16f, 28f)
+        val lyricSp = ((maxHeight.value * 0.038f).coerceIn(18f, 34f) * lScale).coerceIn(15f, 46f)
+        val subSp = ((maxHeight.value * 0.022f).coerceIn(12.5f, 19f) * lScale).coerceIn(11f, 26f)
+        val stampScale = (maxHeight.value / 720f).coerceIn(0.95f, 1.28f)
+
+        // Strict 1:1 square tile grid so album covers NEVER stretch or squash
         val rows = 4
         val gap = 8.dp
         val tileSize = ((maxHeight - gap * (rows + 1)) / rows).coerceAtLeast(80.dp)
@@ -906,7 +944,7 @@ fun DesktopPosterWallStage(
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = if (tileSong.id == currentSong.id) 0.14f else 0.44f)),
+                                    .background(Color.Black.copy(alpha = if (tileSong.id == currentSong.id) 0.14f else 0.46f)),
                             )
                         }
                     }
@@ -914,57 +952,86 @@ fun DesktopPosterWallStage(
             }
         }
 
-        // Studio radial + bottom dark vignette
+        // Studio vertical vignette: clear disc showcase above, deep quiet backdrop below for info & lyrics
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        0.00f to Color.Black.copy(alpha = 0.22f),
-                        0.45f to Color.Black.copy(alpha = 0.16f),
-                        0.76f to Color.Black.copy(alpha = 0.74f),
+                        0.00f to Color.Black.copy(alpha = 0.24f),
+                        0.48f to Color.Black.copy(alpha = 0.18f),
+                        0.70f to Color.Black.copy(alpha = 0.72f),
                         1.00f to Color.Black.copy(alpha = 0.94f),
                     ),
                 ),
         )
 
-        // Monumental centered spinning vinyl with crisp center-overlaid title & lyric (matches image_7d991e.jpg!)
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
+        // Unobstructed giant vinyl above + cleanly anchored song info & lyrics BELOW the vinyl
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
             DesktopSpinningVinylDisc(
                 filePath = currentSong.filePath,
                 rotationDegrees = vinylRotation,
                 discSize = discSize,
-                modifier = Modifier.clickable(onClick = onTogglePlayPause),
+                modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onTogglePlayPause),
             )
+            Spacer(modifier = Modifier.height(18.dp))
             Column(
                 modifier = Modifier
-                    .fillMaxWidth(0.72f)
-                    .background(Color.Black.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
+                    .fillMaxWidth(0.76f)
+                    .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(14.dp))
+                    .border(0.6.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
                     .padding(horizontal = 24.dp, vertical = 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(
-                    text = "${currentSong.title} · ${currentSong.artist}",
-                    fontSize = titleSp.sp,
-                    color = Color(0xFFE5DFD5),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (activeText.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Text(
-                        text = activeText,
+                        text = "${currentSong.title}  ·  ${currentSong.artist}",
+                        fontSize = titleSp.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFF3EDE2),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    DesktopAudioSpecStamp(
+                        song = currentSong,
+                        isDarkSurface = true,
+                        accentColor = accentColor,
+                        scale = stampScale,
+                    )
+                }
+                if (activePrimary.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = activePrimary,
                         fontSize = lyricSp.sp,
-                        fontFamily = FontFamily.Serif,
+                        lineHeight = (lyricSp * 1.24f).sp,
+                        fontFamily = lyricFamily,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFFFAF6EE),
                         textAlign = TextAlign.Center,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (subLyricText.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = subLyricText,
+                            fontSize = subSp.sp,
+                            fontFamily = lyricFamily,
+                            color = Color(0xFFC2B9AC),
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -1412,21 +1479,36 @@ fun DesktopLiveSpectrumBar(
                 val totalH = size.height
                 val playheadX = (totalW * progress).coerceIn(0f, totalW)
 
+                fun sampleSmooth(arr: FloatArray, u: Float): Float {
+                    val fIdx = (u.coerceIn(0f, 1f) * (arr.size - 1))
+                    val i0 = fIdx.toInt().coerceIn(0, arr.size - 1)
+                    val i1 = (i0 + 1).coerceAtMost(arr.size - 1)
+                    val t = fIdx - i0
+                    val smoothT = t * t * (3f - 2f * t)
+                    return arr[i0] + (arr[i1] - arr[i0]) * smoothT
+                }
+
+                // Dynamic width-aware bar density: keeps micro-capsules fine and evenly spaced on any aspect ratio
+                val densityPx = density
+                val displayBars = (totalW / (8.5f * densityPx)).toInt().coerceIn(56, 148)
+
                 when (spectrumStyle) {
                     DesktopSpectrumStyle.SILK_RIBBON -> {
-                        val step = totalW / barCount
-                        val barW = (step * 0.42f).coerceIn(2.2f, 5.0f)
+                        val step = totalW / displayBars
+                        val barW = (step * 0.44f).coerceIn(2.0f * densityPx, 3.6f * densityPx)
                         val baseY = totalH - 3f
                         val crestPath = Path()
                         var prevX = 0f; var prevY = baseY
-                        for (i in 0 until barCount) {
+                        for (i in 0 until displayBars) {
+                            val u = i.toFloat() / (displayBars - 1).coerceAtLeast(1)
+                            val level = sampleSmooth(animatedLevels, u)
                             val cx = i * step + step * 0.5f
                             val isPlayed = cx <= playheadX
-                            val barH = ((totalH - 8f) * animatedLevels[i]).coerceAtLeast(3.5f)
+                            val barH = ((totalH - 10f) * level).coerceAtLeast(3.5f)
                             val topY = baseY - barH
                             val col = if (isPlayed) playedColor else unplayedColor
                             drawRoundRect(
-                                brush = Brush.verticalGradient(0.0f to col, 0.72f to col.copy(alpha = if (isPlayed) 0.65f else 0.35f), 1.0f to Color.Transparent, startY = topY, endY = baseY),
+                                brush = Brush.verticalGradient(0.0f to col.copy(alpha = if (isPlayed) 0.92f else 0.62f), 0.75f to col.copy(alpha = if (isPlayed) 0.48f else 0.24f), 1.0f to Color.Transparent, startY = topY, endY = baseY),
                                 topLeft = Offset(cx - barW * 0.5f, topY),
                                 size = Size(barW, barH),
                                 cornerRadius = CornerRadius(barW * 0.5f, barW * 0.5f),
@@ -1438,35 +1520,36 @@ fun DesktopLiveSpectrumBar(
                         }
                         crestPath.lineTo(prevX, prevY)
                         clipRect(0f, 0f, playheadX, totalH) {
-                            drawPath(crestPath, color = playedColor.copy(alpha = 0.22f), style = Stroke(6f, cap = StrokeCap.Round))
-                            drawPath(crestPath, color = playedColor.copy(alpha = 0.92f), style = Stroke(1.9f, cap = StrokeCap.Round))
+                            drawPath(crestPath, color = playedColor.copy(alpha = 0.20f), style = Stroke(5f, cap = StrokeCap.Round))
+                            drawPath(crestPath, color = playedColor.copy(alpha = 0.90f), style = Stroke(1.8f, cap = StrokeCap.Round))
                         }
                         clipRect(playheadX, 0f, totalW, totalH) {
-                            drawPath(crestPath, color = unplayedColor.copy(alpha = 0.72f), style = Stroke(1.4f, cap = StrokeCap.Round))
+                            drawPath(crestPath, color = unplayedColor.copy(alpha = 0.68f), style = Stroke(1.3f, cap = StrokeCap.Round))
                         }
                     }
 
                     DesktopSpectrumStyle.HARMONIC_STRINGS -> {
                         val midY = totalH * 0.52f
-                        val step = totalW / (barCount - 1)
+                        val pts = displayBars.coerceAtMost(120)
+                        val step = totalW / (pts - 1).coerceAtLeast(1)
                         for (layer in 0..2) {
                             val ampScale = when (layer) { 0 -> 0.44f; 1 -> 0.30f; else -> 0.19f }
                             val path = Path()
                             var px = 0f; var py = midY
-                            for (i in 0 until barCount) {
+                            for (i in 0 until pts) {
                                 val x = i * step
-                                val u = i.toFloat() / (barCount - 1)
+                                val u = i.toFloat() / (pts - 1).coerceAtLeast(1)
                                 val edgeTap = sin(u * PI).toFloat().coerceAtLeast(0.08f)
-                                val osc = sin(phaseTime * (1.1f + layer * 0.25f) + i * 0.32f + layer * 1.45f)
-                                val y = midY + osc * animatedLevels[i] * totalH * ampScale * edgeTap
+                                val osc = sin(phaseTime * (1.1f + layer * 0.25f) + u * 16f + layer * 1.45f)
+                                val y = midY + osc * sampleSmooth(animatedLevels, u) * totalH * ampScale * edgeTap
                                 if (i == 0) path.moveTo(x, y) else path.quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
                                 px = x; py = y
                             }
                             path.lineTo(px, py)
-                            val strokeW = when (layer) { 0 -> 2.4f; 1 -> 1.6f; else -> 1.1f }
+                            val strokeW = when (layer) { 0 -> 2.3f; 1 -> 1.5f; else -> 1.0f }
                             val alphaP = when (layer) { 0 -> 0.94f; 1 -> 0.56f; else -> 0.32f }
                             clipRect(0f, 0f, playheadX, totalH) {
-                                if (layer == 0) drawPath(path, color = playedColor.copy(alpha = 0.20f), style = Stroke(7f, cap = StrokeCap.Round))
+                                if (layer == 0) drawPath(path, color = playedColor.copy(alpha = 0.20f), style = Stroke(6.5f, cap = StrokeCap.Round))
                                 drawPath(path, color = playedColor.copy(alpha = alphaP), style = Stroke(strokeW, cap = StrokeCap.Round))
                             }
                             clipRect(playheadX, 0f, totalW, totalH) {
@@ -1476,21 +1559,23 @@ fun DesktopLiveSpectrumBar(
                     }
 
                     DesktopSpectrumStyle.DOT_MATRIX -> {
-                        val step = totalW / barCount
+                        val dotCols = (totalW / (10.5f * densityPx)).toInt().coerceIn(48, 120)
+                        val step = totalW / dotCols
                         val rows = 8
                         val rowH = (totalH - 6f) / rows
                         val dotR = (minOf(step, rowH) * 0.30f).coerceIn(1.5f, 2.8f)
                         val baseY = totalH - 3f
-                        for (i in 0 until barCount) {
+                        for (i in 0 until dotCols) {
+                            val u = i.toFloat() / (dotCols - 1).coerceAtLeast(1)
                             val cx = i * step + step * 0.5f
                             val isPlayed = cx <= playheadX
-                            val activeRows = (animatedLevels[i] * rows).roundToInt().coerceIn(1, rows)
+                            val activeRows = (sampleSmooth(animatedLevels, u) * rows).roundToInt().coerceIn(1, rows)
                             val col = if (isPlayed) playedColor else unplayedColor
                             for (r in 0 until activeRows) {
                                 val cy = baseY - r * rowH - rowH * 0.5f
                                 drawCircle(col.copy(alpha = 0.45f + 0.55f * (r.toFloat() / rows)), radius = dotR, center = Offset(cx, cy))
                             }
-                            val peakRow = (peakDots[i] * (rows - 1)).coerceIn(0f, (rows - 1).toFloat())
+                            val peakRow = (sampleSmooth(peakDots, u) * (rows - 1)).coerceIn(0f, (rows - 1).toFloat())
                             val peakY = baseY - peakRow * rowH - rowH * 0.5f
                             drawCircle(if (isPlayed) accentColor else unplayedColor.copy(alpha = 0.85f), radius = dotR * 1.18f, center = Offset(cx, peakY))
                         }
@@ -1498,13 +1583,15 @@ fun DesktopLiveSpectrumBar(
 
                     DesktopSpectrumStyle.INK_MOUNTAIN -> {
                         val baseY = totalH - 2f
-                        val step = totalW / (barCount - 1)
+                        val pts = displayBars.coerceAtMost(120)
+                        val step = totalW / (pts - 1).coerceAtLeast(1)
                         val backPath = Path().apply {
                             moveTo(0f, baseY)
                             var px = 0f; var py = baseY
-                            for (i in 0 until barCount) {
+                            for (i in 0 until pts) {
                                 val x = i * step
-                                val y = baseY - (totalH - 10f) * (animatedLevels[(i + 4) % barCount] * 0.72f + 0.08f)
+                                val u = ((i.toFloat() / (pts - 1).coerceAtLeast(1)) + 0.08f) % 1f
+                                val y = baseY - (totalH - 10f) * (sampleSmooth(animatedLevels, u) * 0.72f + 0.08f)
                                 if (i == 0) lineTo(x, y) else quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
                                 px = x; py = y
                             }
@@ -1514,9 +1601,10 @@ fun DesktopLiveSpectrumBar(
                         val frontPath = Path().apply {
                             moveTo(0f, baseY)
                             var px = 0f; var py = baseY
-                            for (i in 0 until barCount) {
+                            for (i in 0 until pts) {
                                 val x = i * step
-                                val y = baseY - (totalH - 6f) * (animatedLevels[i] * 0.94f + 0.05f)
+                                val u = i.toFloat() / (pts - 1).coerceAtLeast(1)
+                                val y = baseY - (totalH - 6f) * (sampleSmooth(animatedLevels, u) * 0.94f + 0.05f)
                                 if (i == 0) lineTo(x, y) else quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
                                 px = x; py = y
                             }
@@ -1546,12 +1634,17 @@ fun DesktopImmersiveControlMenu(
     currentScene: DesktopSceneStyle,
     currentSpectrum: DesktopSpectrumStyle,
     lyricOffsetMs: Long,
+    lyricFontScale: Float,
     accentColor: Color,
     onDismiss: () -> Unit,
     onSelectScene: (DesktopSceneStyle) -> Unit,
     onSelectSpectrum: (DesktopSpectrumStyle) -> Unit,
     onAdjustLyricOffset: (Long) -> Unit,
     onResetLyricOffset: () -> Unit,
+    onAdjustLyricScale: (Float) -> Unit,
+    onResetLyricScale: () -> Unit,
+    onImportLyrics: () -> Unit,
+    onReplaceCover: () -> Unit,
 ) {
     val menuBg = if (isDarkSurface) Color(0xF21A1918) else Color(0xF5FBF9F4)
     val borderColor = if (isDarkSurface) Color.White.copy(alpha = 0.14f) else Color(0xFFDDD6C8)
@@ -1564,7 +1657,7 @@ fun DesktopImmersiveControlMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         modifier = Modifier
-            .width(264.dp)
+            .width(284.dp)
             .background(menuBg, RoundedCornerShape(16.dp))
             .border(0.75.dp, borderColor, RoundedCornerShape(16.dp)),
     ) {
@@ -1581,6 +1674,7 @@ fun DesktopImmersiveControlMenu(
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(if (selected) activeAccent.copy(alpha = 0.18f) else pillBg)
                                     .border(0.75.dp, if (selected) activeAccent else Color.Transparent, RoundedCornerShape(10.dp))
+                                    .pointerHoverIcon(PointerIcon.Hand)
                                     .clickable { onSelectScene(st) }
                                     .padding(vertical = 7.dp),
                                 contentAlignment = Alignment.Center,
@@ -1607,6 +1701,7 @@ fun DesktopImmersiveControlMenu(
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(if (selected) activeAccent.copy(alpha = 0.18f) else pillBg)
                                     .border(0.75.dp, if (selected) activeAccent else Color.Transparent, RoundedCornerShape(10.dp))
+                                    .pointerHoverIcon(PointerIcon.Hand)
                                     .clickable { onSelectSpectrum(sp) }
                                     .padding(vertical = 7.dp),
                                 contentAlignment = Alignment.Center,
@@ -1620,6 +1715,41 @@ fun DesktopImmersiveControlMenu(
 
             HorizontalDivider(thickness = 0.6.dp, color = borderColor)
 
+            // Lyric Size A- / 100% / A+
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("歌词字号", fontSize = 11.sp, color = muted)
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(pillBg)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { onAdjustLyricScale(-0.10f) }
+                            .padding(horizontal = 9.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("A-", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = ink) }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(pillBg)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { onResetLyricScale() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("${(lyricFontScale * 100).toInt()}%", fontSize = 11.sp, color = activeAccent, fontWeight = FontWeight.SemiBold) }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(pillBg)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { onAdjustLyricScale(0.10f) }
+                            .padding(horizontal = 9.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("A+", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = ink) }
+                }
+            }
+
+            // Lyric Offset
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("歌词微调 ${if (lyricOffsetMs >= 0) "+" else ""}${String.format("%.1fs", lyricOffsetMs / 1000f)}", fontSize = 11.sp, color = muted)
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1628,12 +1758,46 @@ fun DesktopImmersiveControlMenu(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(pillBg)
+                                .pointerHoverIcon(PointerIcon.Hand)
                                 .clickable { if (delta == 0L) onResetLyricOffset() else onAdjustLyricOffset(delta) }
                                 .padding(horizontal = 7.dp, vertical = 4.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
                             Text(lbl, fontSize = 11.sp, color = ink)
                         }
                     }
+                }
+            }
+
+            HorizontalDivider(thickness = 0.6.dp, color = borderColor)
+
+            // Import LRC Lyrics + Replace Album Cover
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(pillBg)
+                        .border(0.6.dp, borderColor, RoundedCornerShape(10.dp))
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable { onDismiss(); onImportLyrics() }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("匹配/导入歌词", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = ink, maxLines = 1)
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(pillBg)
+                        .border(0.6.dp, borderColor, RoundedCornerShape(10.dp))
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable { onDismiss(); onReplaceCover() }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("替换专辑封面", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = ink, maxLines = 1)
                 }
             }
         }
@@ -1673,7 +1837,11 @@ fun DesktopSplashOverlay(visible: Boolean, darkMode: Boolean) {
  * Loads Microsoft YaHei UI (msyh.ttc / msyhbd.ttc) for razor-sharp UI body & CJK text,
  * and Georgia (georgia.ttf / georgiab.ttf) for editorial serif lyrics, with clean cross-OS fallback.
  */
+val LocalLyricFontFamily = compositionLocalOf<FontFamily> { DesktopTypographyFamilies.editorialSerif }
+
 object DesktopTypographyFamilies {
+    private val customCache = mutableMapOf<String, FontFamily>()
+
     val uiSans: FontFamily by lazy {
         runCatching {
             val regular = File("C:/Windows/Fonts/msyh.ttc")
@@ -1695,6 +1863,22 @@ object DesktopTypographyFamilies {
         }.getOrDefault(FontFamily.SansSerif)
     }
 
+    val songtiSerif: FontFamily by lazy {
+        runCatching {
+            val candidates = listOf("C:/Windows/Fonts/simsun.ttc", "C:/Windows/Fonts/STSONG.TTF", "C:/Windows/Fonts/simsunb.ttf")
+            val found = candidates.map { File(it) }.firstOrNull { it.exists() }
+            if (found != null) FontFamily(Font(file = found, weight = FontWeight.Normal, style = FontStyle.Normal)) else FontFamily.Serif
+        }.getOrDefault(FontFamily.Serif)
+    }
+
+    val kaitiScript: FontFamily by lazy {
+        runCatching {
+            val candidates = listOf("C:/Windows/Fonts/simkai.ttf", "C:/Windows/Fonts/STKAITI.TTF")
+            val found = candidates.map { File(it) }.firstOrNull { it.exists() }
+            if (found != null) FontFamily(Font(file = found, weight = FontWeight.Normal, style = FontStyle.Normal)) else FontFamily.Serif
+        }.getOrDefault(FontFamily.Serif)
+    }
+
     val editorialSerif: FontFamily by lazy {
         runCatching {
             val reg = File("C:/Windows/Fonts/georgia.ttf")
@@ -1710,6 +1894,31 @@ object DesktopTypographyFamilies {
                 FontFamily.Serif
             }
         }.getOrDefault(FontFamily.Serif)
+    }
+
+    fun loadCustomFont(path: String?): FontFamily? {
+        if (path.isNullOrBlank()) return null
+        customCache[path]?.let { return it }
+        return runCatching {
+            val f = File(path)
+            if (f.exists() && f.isFile) {
+                FontFamily(Font(file = f, weight = FontWeight.Normal, style = FontStyle.Normal)).also { customCache[path] = it }
+            } else null
+        }.getOrNull()
+    }
+
+    fun resolveAppFont(style: DesktopFontStyle, customPath: String?): FontFamily = when (style) {
+        DesktopFontStyle.YAHEI -> uiSans
+        DesktopFontStyle.SONGTI -> songtiSerif
+        DesktopFontStyle.KAITI -> kaitiScript
+        DesktopFontStyle.CUSTOM -> loadCustomFont(customPath) ?: uiSans
+    }
+
+    fun resolveLyricFont(lyricStyle: DesktopLyricFontStyle, appStyle: DesktopFontStyle, customPath: String?): FontFamily = when (lyricStyle) {
+        DesktopLyricFontStyle.SERIF -> editorialSerif
+        DesktopLyricFontStyle.SANS -> uiSans
+        DesktopLyricFontStyle.KAITI -> kaitiScript
+        DesktopLyricFontStyle.FOLLOW_APP -> resolveAppFont(appStyle, customPath)
     }
 }
 
