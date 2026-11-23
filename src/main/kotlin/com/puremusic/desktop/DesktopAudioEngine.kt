@@ -495,9 +495,8 @@ class DesktopAudioEngine(
             runCatching { line.stop() }
             DesktopSpectrumBus.resetToIdle()
         } else {
-            val cfFrames = if (startMs <= 0L && crossfadeSeconds > 0) (crossfadeSeconds * 44100) else 352
-                    fadeTotalFrames = cfFrames
-                    pendingFadeInFrames = cfFrames // ~8ms soft resume ramp
+            fadeTotalFrames = 352
+        pendingFadeInFrames = 352 // ~8ms soft resume ramp
             runCatching { line.start() }
         }
         onStateChanged(!isPaused, currentPositionMs, totalDurationMs)

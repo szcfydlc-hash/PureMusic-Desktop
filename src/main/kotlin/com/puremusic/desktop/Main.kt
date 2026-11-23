@@ -951,6 +951,7 @@ fun main() = application {
 
                                     DesktopTab.SETTINGS -> DesktopSettingsPage(
                                         config = config,
+                                        onUpdateConfig = { cfg -> updateConfig { cfg } },
                                         sleepTimerRemainingSec = sleepTimerRemainingSec,
                                         onToggleDarkMode = { dm -> updateConfig { it.copy(darkMode = dm) } },
                                         onSelectAccent = { ac -> updateConfig { it.copy(accentColor = ac) } },
@@ -1067,6 +1068,7 @@ fun main() = application {
                     val song = playerState.currentSong
                     if (song != null) {
                         UnifiedImmersiveStage(
+                        karaokeLyricMode = config.karaokeLyricMode,
                             song = song,
                             allSongs = allSongs,
                             playerState = playerState,
@@ -3457,6 +3459,7 @@ private fun UnifiedImmersiveStage(
     onVolumeChange: (Float) -> Unit,
     onToggleEq: () -> Unit,
     onToggleQueue: () -> Unit,
+    karaokeLyricMode: DesktopKaraokeLyricMode = DesktopKaraokeLyricMode.SMART,
 ) {
     val isDarkScene = when (sceneStyle) {
         DesktopSceneStyle.VINYL_STUDY -> isDarkTheme
