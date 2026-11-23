@@ -461,6 +461,10 @@ class DesktopAudioEngine(
     @Volatile private var totalDurationMs: Long = 0L
     @Volatile private var isPaused = false
     @Volatile private var volumeLevel = 0.85f
+    @Volatile private var crossfadeSeconds = 0
+    @Volatile private var volumeNormalizationEnabled = false
+    @Volatile private var fadeTotalFrames = 352
+    private var normSmoothedGain = 1.0f
     @Volatile private var currentLine: SourceDataLine? = null
     @Volatile private var currentProcess: Process? = null
     @Volatile private var playbackThread: Thread? = null
@@ -491,7 +495,9 @@ class DesktopAudioEngine(
             runCatching { line.stop() }
             DesktopSpectrumBus.resetToIdle()
         } else {
-            pendingFadeInFrames = 352 // ~8ms soft resume ramp
+            val cfFrames = if (startMs <= 0L && crossfadeSeconds > 0) (crossfadeSeconds * 44100) else 352
+                    fadeTotalFrames = cfFrames
+                    pendingFadeInFrames = cfFrames // ~8ms soft resume ramp
             runCatching { line.start() }
         }
         onStateChanged(!isPaused, currentPositionMs, totalDurationMs)
@@ -506,6 +512,15 @@ class DesktopAudioEngine(
             DesktopSpectrumBus.resetToIdle()
             onStateChanged(false, currentPositionMs, totalDurationMs)
         }
+    }
+
+    fun setCrossfadeSeconds(seconds: Int) {
+        crossfadeSeconds = seconds.coerceIn(0, 6)
+    }
+
+    fun setVolumeNormalizationEnabled(enabled: Boolean) {
+        volumeNormalizationEnabled = enabled
+        if (!enabled) normSmoothedGain = 1.0f
     }
 
     fun setVolume(vol: Float) {
@@ -576,9 +591,32 @@ class DesktopAudioEngine(
     }
 
     private fun applySoftFadeIn(bytes: ByteArray, alignedLen: Int, channels: Int) {
+        if (volumeNormalizationEnabled && alignedLen >= 4) {
+            var sumSq = 0.0
+            val sampleCount = alignedLen / 2
+            var j = 0
+            while (j + 1 < alignedLen) {
+                val s = ((bytes[j + 1].toInt() shl 8) or (bytes[j].toInt() and 0xFF)).toShort().toInt()
+                sumSq += s.toDouble() * s.toDouble()
+                j += 2
+            }
+            val rms = sqrt(sumSq / sampleCount.coerceAtLeast(1)) / 32768.0
+            val targetGain = if (rms > 0.015) (0.20 / rms).toFloat().coerceIn(0.65f, 1.45f) else 1.0f
+            normSmoothedGain += (targetGain - normSmoothedGain) * 0.06f
+            if (abs(normSmoothedGain - 1.0f) > 0.01f) {
+                var k = 0
+                while (k + 1 < alignedLen) {
+                    val s = ((bytes[k + 1].toInt() shl 8) or (bytes[k].toInt() and 0xFF)).toShort().toInt()
+                    val scaled = (tanh((s * normSmoothedGain / 32768.0)) * 32767.0).toInt().coerceIn(-32768, 32767)
+                    bytes[k] = (scaled and 0xFF).toByte()
+                    bytes[k + 1] = ((scaled shr 8) and 0xFF).toByte()
+                    k += 2
+                }
+            }
+        }
         var remaining = pendingFadeInFrames
         if (remaining <= 0) return
-        val totalRamp = 352
+        val totalRamp = fadeTotalFrames.coerceAtLeast(352)
         val frameBytes = channels * 2
         val frames = alignedLen / frameBytes
         for (f in 0 until frames) {
@@ -693,7 +731,9 @@ class DesktopAudioEngine(
 
             val bytesPerSecond = (targetRate * frameBytes).toLong()
             var bytesPlayed = (startMs * bytesPerSecond) / 1000L
-            pendingFadeInFrames = 352 // 8ms click-free fade-in
+            val cfFrames = if (startMs <= 0L && crossfadeSeconds > 0) (crossfadeSeconds * 44100) else 352
+                    fadeTotalFrames = cfFrames
+                    pendingFadeInFrames = cfFrames // 8ms click-free fade-in
 
             val buffer = ByteArray(8192)
             var carryCount = 0
@@ -790,7 +830,9 @@ class DesktopAudioEngine(
 
                     val bytesPerSecond = (targetRate * frameBytes).toLong().coerceAtLeast(1L)
                     var bytesPlayed = (startMs * bytesPerSecond) / 1000L
-                    pendingFadeInFrames = 352
+                    val cfFrames = if (startMs <= 0L && crossfadeSeconds > 0) (crossfadeSeconds * 44100) else 352
+                    fadeTotalFrames = cfFrames
+                    pendingFadeInFrames = cfFrames
 
                     if (startMs > 0L) {
                         var toSkip = (bytesPlayed / frameBytes) * frameBytes

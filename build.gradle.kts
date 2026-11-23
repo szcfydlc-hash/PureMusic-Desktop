@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.puremusic.desktop"
-version = "3.5.0"
+version = "3.6.0"
 
 dependencies {
     implementation(compose.desktop.currentOs)
@@ -41,12 +41,13 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "PureMusic"
-            packageVersion = "3.5.0"
+            packageVersion = "3.6.0"
             description = "PureMusic - Native Offline Hi-Res Local Music Player"
             vendor = "PureMusic"
             includeAllModules = true
 
             windows {
+                iconFile.set(project.file("src/main/resources/app_icon.ico"))
                 menuGroup = "PureMusic"
                 shortcut = true
                 perUserInstall = true

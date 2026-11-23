@@ -56,6 +56,7 @@ object DesktopLibraryScanner {
         var title = file.nameWithoutExtension
         var artist = "未知歌手"
         var album = "未知专辑"
+        var genre = ""
         var durationMs = 0L
         var sampleRateHz = 44100
         var bitRateKbps = 0
@@ -80,6 +81,7 @@ object DesktopLibraryScanner {
                 tag.getFirst(FieldKey.TITLE)?.trim()?.takeIf { it.isNotEmpty() }?.let { title = it }
                 tag.getFirst(FieldKey.ARTIST)?.trim()?.takeIf { it.isNotEmpty() }?.let { artist = it }
                 tag.getFirst(FieldKey.ALBUM)?.trim()?.takeIf { it.isNotEmpty() }?.let { album = it }
+                tag.getFirst(FieldKey.GENRE)?.trim()?.takeIf { it.isNotEmpty() }?.let { genre = normalizeGenre(it) }
             }
         }
 
@@ -110,6 +112,7 @@ object DesktopLibraryScanner {
             bitRateKbps = bitRateKbps,
             bitsPerSample = bitsPerSample,
             folderName = file.parentFile?.name ?: "本地音乐",
+            genre = genre,
         )
     }
 
@@ -194,35 +197,94 @@ object DesktopLibraryScanner {
     }
 
     private val timeRegex = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?]""")
+    private val enhancedWordRegex = Regex("""<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>([^<]*)""")
+
+    private fun decodeHtmlEntities(s: String): String = s
+        .replace("&apos;", "'")
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+
+    private fun parseFracMs(fracRaw: String): Long = when (fracRaw.length) {
+        1 -> (fracRaw.toLongOrNull() ?: 0L) * 100L
+        2 -> (fracRaw.toLongOrNull() ?: 0L) * 10L
+        3 -> fracRaw.toLongOrNull() ?: 0L
+        else -> 0L
+    }
+
+    private fun parseEnhancedWords(rawLineBody: String): List<LyricWord> {
+        val matches = enhancedWordRegex.findAll(rawLineBody).toList()
+        if (matches.isEmpty()) return emptyList()
+        val starts = matches.map { m ->
+            val min = m.groupValues[1].toLongOrNull() ?: 0L
+            val sec = m.groupValues[2].toLongOrNull() ?: 0L
+            min * 60_000L + sec * 1000L + parseFracMs(m.groupValues[3])
+        }
+        return matches.mapIndexedNotNull { idx, m ->
+            val txt = decodeHtmlEntities(m.groupValues[4])
+            if (txt.isEmpty()) return@mapIndexedNotNull null
+            val st = starts[idx]
+            val en = if (idx + 1 < starts.size) starts[idx + 1].coerceAtLeast(st + 60L) else st + 420L
+            LyricWord(startMs = st, endMs = en, text = txt)
+        }
+    }
 
     fun parseLrc(raw: String): List<LyricLine> {
-        val grouped = linkedMapOf<Long, MutableList<String>>()
+        val grouped = linkedMapOf<Long, MutableList<Pair<String, List<LyricWord>>>>()
         raw.lines().forEach { line ->
             val matches = timeRegex.findAll(line).toList()
             if (matches.isEmpty()) return@forEach
-            val text = line.replace(timeRegex, "").trim()
-            if (text.isEmpty()) return@forEach
+            val body = line.replace(timeRegex, "").trim()
+            if (body.isEmpty()) return@forEach
+            val words = parseEnhancedWords(body)
+            val cleanText = decodeHtmlEntities(body.replace(Regex("""<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>"""), "")).trim()
+            if (cleanText.isEmpty()) return@forEach
             matches.forEach { m ->
                 val min = m.groupValues[1].toLongOrNull() ?: 0L
                 val sec = m.groupValues[2].toLongOrNull() ?: 0L
-                val fracRaw = m.groupValues[3]
-                val ms = when (fracRaw.length) {
-                    1 -> (fracRaw.toLongOrNull() ?: 0L) * 100L
-                    2 -> (fracRaw.toLongOrNull() ?: 0L) * 10L
-                    3 -> fracRaw.toLongOrNull() ?: 0L
-                    else -> 0L
-                }
-                val totalMs = min * 60_000L + sec * 1000L + ms
-                grouped.getOrPut(totalMs) { mutableListOf() }.add(text)
+                val totalMs = min * 60_000L + sec * 1000L + parseFracMs(m.groupValues[3])
+                grouped.getOrPut(totalMs) { mutableListOf() }.add(cleanText to words)
             }
         }
-        return grouped.entries.sortedBy { it.key }.map { (timeMs, texts) ->
-            if (texts.size >= 2) {
-                LyricLine(timeMs, texts[0], texts[1])
+        return grouped.entries.sortedBy { it.key }.map { (timeMs, entries) ->
+            val primaryWords = entries.firstOrNull { it.second.isNotEmpty() }?.second.orEmpty()
+            if (entries.size >= 2) {
+                LyricLine(timeMs, entries[0].first, entries[1].first, primaryWords)
             } else {
-                val (p, s) = splitBilingualLyric(texts[0])
-                LyricLine(timeMs, p, s)
+                val (p, s) = splitBilingualLyric(entries[0].first)
+                LyricLine(timeMs, p, s, primaryWords)
             }
+        }
+    }
+
+    private fun normalizeGenre(raw: String?): String {
+        val cleaned = raw
+            ?.replace(Regex("""^\(\d+\)\s*"""), "")
+            ?.trim()
+            .orEmpty()
+        if (cleaned.length <= 1) return ""
+        val lower = cleaned.lowercase()
+        if (lower == "<unknown>" || lower == "unknown" || lower == "other" || lower == "misc" || lower == "none" || lower.all { it.isDigit() }) {
+            return ""
+        }
+        return when {
+            lower.contains("singer") || lower.contains("songwriter") || lower.contains("folk") || lower.contains("acoustic") || lower.contains("民谣") -> "民谣"
+            lower.contains("electronic") || lower.contains("electronica") || lower.contains("edm") || lower.contains("trip-hop") || lower.contains("trip hop") || lower.contains("downtempo") || lower.contains("house") || lower.contains("techno") || lower.contains("trance") || lower.contains("synth") || lower.contains("lo-fi") || lower.contains("lofi") || lower.contains("电子") -> "电子"
+            lower.contains("new age") || lower.contains("ambient") || lower.contains("easy listening") || lower.contains("instrumental") || lower.contains("lounge") || lower.contains("chillout") || lower.contains("piano") || lower.contains("world") || lower.contains("轻音乐") || lower.contains("纯音乐") || lower.contains("器乐") -> "轻音乐"
+            lower.contains("indie") || lower.contains("alternative") || lower.contains("shoegaze") || lower.contains("post-rock") || lower.contains("britpop") || lower.contains("独立") || lower.contains("另类") -> "独立"
+            lower.contains("soundtrack") || lower.contains("ost") || lower.contains("score") || lower.contains("film") || lower.contains("game") || lower.contains("anime") || lower.contains("原声") || lower.contains("影视") -> "原声"
+            lower.contains("jazz") || lower.contains("swing") || lower.contains("bossa") || lower.contains("爵士") -> "爵士"
+            lower.contains("metal") || lower.contains("金属") -> "金属"
+            lower.contains("rock") || lower.contains("punk") || lower.contains("grunge") || lower.contains("摇滚") -> "摇滚"
+            lower.contains("classical") || lower.contains("orchestra") || lower.contains("symphony") || lower.contains("opera") || lower.contains("古典") -> "古典"
+            lower.contains("hip-hop") || lower.contains("hip hop") || lower.contains("rap") || lower.contains("trap") || lower.contains("说唱") || lower.contains("嘻哈") -> "说唱"
+            lower.contains("r&b") || lower.contains("rnb") || lower.contains("soul") || lower.contains("funk") || lower.contains("节奏布鲁斯") -> "R&B"
+            lower.contains("blues") || lower.contains("蓝调") -> "蓝调"
+            lower.contains("country") || lower.contains("乡村") -> "乡村"
+            lower.contains("pop") || lower.contains("top 40") || lower.contains("top40") || lower.contains("dance") || lower.contains("vocal") || lower.contains("ballad") || lower.contains("流行") || lower.contains("华语") -> "流行"
+            else -> ""
         }
     }
 }
@@ -265,6 +327,9 @@ object DesktopConfigStore {
         val playCounts = mutableMapOf<String, Int>()
         val hourlyPlays = mutableMapOf<Int, Int>()
         val playlists = mutableListOf<DesktopPlaylist>()
+        var karaokeLyricMode = DesktopKaraokeLyricMode.SMART
+        var crossfadeSec = 0
+        var volumeNormalizationEnabled = false
         var eqEnabled = false
         var eqBands = listOf(0f, 0f, 0f, 0f, 0f)
         val lyricOffsets = mutableMapOf<String, Long>()
@@ -305,6 +370,9 @@ object DesktopConfigStore {
                     "spectrum" -> spectrum = DesktopSpectrumStyle.entries.firstOrNull { it.name == v } ?: DesktopSpectrumStyle.SILK_RIBBON
                     "favorites" -> favs = v.split('|').filter { it.isNotBlank() }.toSet()
                     "recents" -> recents = v.split('|').filter { it.isNotBlank() }
+                    "karaokeLyricMode" -> DesktopKaraokeLyricMode.entries.firstOrNull { it.name == v }?.let { karaokeLyricMode = it }
+                    "crossfadeSec" -> v.toIntOrNull()?.let { crossfadeSec = it.coerceIn(0, 6) }
+                    "volumeNormalizationEnabled" -> volumeNormalizationEnabled = v.toBoolean()
                     "eqEnabled" -> eqEnabled = v.toBoolean()
                     "volume" -> volume = (v.toFloatOrNull() ?: 0.85f).coerceIn(0f, 1f)
                     "repeatMode" -> repeatMode = RepeatMode.entries.firstOrNull { it.name == v } ?: RepeatMode.ALL
@@ -393,6 +461,9 @@ object DesktopConfigStore {
             playCounts = playCounts,
             hourlyPlays = hourlyPlays,
             playlists = playlists,
+            karaokeLyricMode = karaokeLyricMode,
+            crossfadeSec = crossfadeSec,
+            volumeNormalizationEnabled = volumeNormalizationEnabled,
             eqEnabled = eqEnabled,
             eqBandsDb = eqBands,
             lyricOffsetsMs = lyricOffsets,
@@ -431,6 +502,9 @@ object DesktopConfigStore {
             sb.appendLine("spectrum=${cfg.spectrumStyle.name}")
             sb.appendLine("favorites=${cfg.favoritePaths.joinToString("|")}")
             sb.appendLine("recents=${cfg.recentPaths.take(50).joinToString("|")}")
+            sb.appendLine("karaokeLyricMode=${cfg.karaokeLyricMode.name}")
+            sb.appendLine("crossfadeSec=${cfg.crossfadeSec}")
+            sb.appendLine("volumeNormalizationEnabled=${cfg.volumeNormalizationEnabled}")
             sb.appendLine("eqEnabled=${cfg.eqEnabled}")
             sb.appendLine("volume=${cfg.volume}")
             sb.appendLine("repeatMode=${cfg.repeatMode.name}")

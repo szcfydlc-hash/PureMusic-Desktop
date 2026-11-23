@@ -14,6 +14,7 @@ data class DesktopSong(
     val bitRateKbps: Int = 0,
     val bitsPerSample: Int = 16,
     val folderName: String = "",
+    val genre: String = "",
 ) {
     val isLossless: Boolean
         get() = formatLabel in setOf("FLAC", "WAV", "AIFF", "ALAC", "APE", "WV", "DSF", "DFF")
@@ -58,10 +59,23 @@ data class DesktopPlaylist(
     val songPaths: List<String>,
 )
 
+data class LyricWord(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+)
+
+enum class DesktopKaraokeLyricMode(val label: String, val desc: String) {
+    SMART("智能逐字", "优先精确词轴，普通 LRC 智能加权推进"),
+    EXACT_ONLY("仅精确", "仅对含逐字时间轴的歌词启用"),
+    CLASSIC("经典整行", "经典整行高亮，不逐字扫描"),
+}
+
 data class LyricLine(
     val timeMs: Long,
     val primaryText: String,
     val secondaryText: String? = null,
+    val words: List<LyricWord> = emptyList(),
 )
 
 // Clean 4-Chapter Book-Index Navigation (100% aligned with Mobile)
@@ -202,6 +216,9 @@ data class DesktopConfig(
     val playCounts: Map<String, Int> = emptyMap(),
     val hourlyPlays: Map<Int, Int> = emptyMap(),
     val playlists: List<DesktopPlaylist> = emptyList(),
+    val karaokeLyricMode: DesktopKaraokeLyricMode = DesktopKaraokeLyricMode.SMART,
+    val crossfadeSec: Int = 0,
+    val volumeNormalizationEnabled: Boolean = false,
     val eqEnabled: Boolean = false,
     val eqBandsDb: List<Float> = listOf(0f, 0f, 0f, 0f, 0f),
     val lyricOffsetsMs: Map<String, Long> = emptyMap(),

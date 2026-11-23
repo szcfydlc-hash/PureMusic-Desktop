@@ -89,6 +89,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
@@ -105,7 +106,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -119,6 +123,9 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.skia.Image as SkiaImage
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -183,7 +190,7 @@ fun rememberSongArtwork(filePath: String?): ImageBitmap? {
  * dynamically breathe with every song's true cover palette.
  */
 @Composable
-fun rememberSongDominantColor(filePath: String?, fallback: Color = Color(0xFF4A2520)): Color {
+fun rememberSongDominantColor(filePath: String?, fallback: Color = Color(0xFF7B8E9B)): Color {
     val bmp = rememberSongArtwork(filePath)
     var dominant by remember(filePath) {
         mutableStateOf(filePath?.let { ArtworkMemoryCache.getColor(it) } ?: fallback)
@@ -200,9 +207,15 @@ fun rememberSongDominantColor(filePath: String?, fallback: Color = Color(0xFF4A2
         val computed = withContext(Dispatchers.Default) {
             runCatching {
                 val pm = bmp.toPixelMap()
-                val stepX = (pm.width / 18).coerceAtLeast(1)
-                val stepY = (pm.height / 18).coerceAtLeast(1)
-                var rSum = 0f; var gSum = 0f; var bSum = 0f; var wSum = 0f
+                val stepX = (pm.width / 24).coerceAtLeast(1)
+                val stepY = (pm.height / 24).coerceAtLeast(1)
+                val binCount = 24
+                val binW = FloatArray(binCount)
+                val binSin = FloatArray(binCount)
+                val binCos = FloatArray(binCount)
+                val binSat = FloatArray(binCount)
+                val binVal = FloatArray(binCount)
+
                 var y = 0
                 while (y < pm.height) {
                     var x = 0
@@ -210,26 +223,54 @@ fun rememberSongDominantColor(filePath: String?, fallback: Color = Color(0xFF4A2
                         val c = pm[x, y]
                         val maxC = max(c.red, max(c.green, c.blue))
                         val minC = minOf(c.red, minOf(c.green, c.blue))
-                        val sat = if (maxC > 0.01f) (maxC - minC) / maxC else 0f
-                        val luma = 0.299f * c.red + 0.587f * c.green + 0.114f * c.blue
-                        // Prefer rich mid-tone colors over pure black/white
-                        val weight = (0.25f + sat * 2.2f) * if (luma in 0.12f..0.86f) 1.4f else 0.35f
-                        rSum += c.red * weight
-                        gSum += c.green * weight
-                        bSum += c.blue * weight
-                        wSum += weight
+                        val delta = maxC - minC
+                        val sat = if (maxC > 0.001f) delta / maxC else 0f
+                        val v = maxC
+                        if (v >= 0.14f && !(v > 0.96f && sat < 0.08f) && sat >= 0.10f) {
+                            var hue = when {
+                                delta < 0.0001f -> 0f
+                                maxC == c.red -> 60f * (((c.green - c.blue) / delta) % 6f)
+                                maxC == c.green -> 60f * (((c.blue - c.red) / delta) + 2f)
+                                else -> 60f * (((c.red - c.green) / delta) + 4f)
+                            }
+                            if (hue < 0f) hue += 360f
+                            val bin = ((hue / 15f).toInt()).coerceIn(0, binCount - 1)
+                            val rad = Math.toRadians(hue.toDouble())
+                            val w = 0.35f + sat * 0.95f
+                            binW[bin] += w
+                            binSin[bin] += (sin(rad) * w).toFloat()
+                            binCos[bin] += (cos(rad) * w).toFloat()
+                            binSat[bin] += sat * w
+                            binVal[bin] += v * w
+                        }
                         x += stepX
                     }
                     y += stepY
                 }
-                if (wSum > 0.01f) {
-                    Color(
-                        red = (rSum / wSum).coerceIn(0.08f, 0.72f),
-                        green = (gSum / wSum).coerceIn(0.08f, 0.72f),
-                        blue = (bSum / wSum).coerceIn(0.08f, 0.72f),
-                        alpha = 1f,
-                    )
-                } else fallback
+                var bestBin = -1
+                var bestWeight = 0f
+                for (i in 0 until binCount) {
+                    if (binW[i] > bestWeight) {
+                        bestWeight = binW[i]
+                        bestBin = i
+                    }
+                }
+                if (bestBin < 0 || bestWeight <= 0f) return@runCatching fallback
+                var tot = 0f; var sSin = 0f; var sCos = 0f; var sSat = 0f; var sVal = 0f
+                for (off in -1..1) {
+                    val idx = (bestBin + off + binCount) % binCount
+                    val f = if (off == 0) 1f else 0.45f
+                    tot += binW[idx] * f
+                    sSin += binSin[idx] * f
+                    sCos += binCos[idx] * f
+                    sSat += binSat[idx] * f
+                    sVal += binVal[idx] * f
+                }
+                var avgHue = Math.toDegrees(atan2(sSin.toDouble(), sCos.toDouble())).toFloat()
+                if (avgHue < 0f) avgHue += 360f
+                val avgSat = (sSat / tot).coerceIn(0.24f, 0.50f)
+                val avgVal = (sVal / tot).coerceIn(0.46f, 0.68f)
+                Color.hsv(avgHue, avgSat, avgVal)
             }.getOrDefault(fallback)
         }
         ArtworkMemoryCache.putColor(filePath, computed)
@@ -605,8 +646,8 @@ fun DesktopSpatialRecordGallery(
                 val yShift = baseY
                 val rotY = if (isFront) dynamicRotY else 17f
                 val sleeveAlpha = (1f - depth * 0.10f).coerceAtLeast(0.52f)
-                val spineW = 9.dp
-                val topRimH = 3.5.dp
+                val spineW = if (isFront) 11.5.dp else 9.dp
+                val topRimH = if (isFront) 3.8.dp else 3.dp
 
                 Column(
                     modifier = Modifier
@@ -622,7 +663,7 @@ fun DesktopSpatialRecordGallery(
                         },
                 ) {
                     Box(modifier = Modifier.width(frontSize + 24.dp).height(frontSize)) {
-                        if (depth in 1..4) {
+                        if (depth in 0..4) {
                             Canvas(modifier = Modifier.align(Alignment.CenterEnd).size(frontSize * 0.86f)) {
                                 val r = size.minDimension * 0.5f
                                 val c = Offset(size.width * 0.5f, size.height * 0.5f)
@@ -659,12 +700,13 @@ fun DesktopSpatialRecordGallery(
                                         .fillMaxSize()
                                         .background(
                                             Brush.horizontalGradient(
-                                                0.00f to Color(0xFF6B6A67),
-                                                0.18f to Color(0xFFF0EEEA),
-                                                0.46f to Color(0xFFC5C3BE),
-                                                0.78f to Color(0xFF7D7B77),
-                                                0.94f to Color(0xFF3E3D3B),
-                                                1.00f to Color(0xFF1A1918),
+                                                0.00f to Color(0xFF5A5956),
+                                                0.14f to Color(0xFF8C8A85),
+                                                0.36f to Color(0xFF454441),
+                                                0.72f to Color(0xFF262523),
+                                                0.86f to Color(0xFF0E0D0D),
+                                                0.93f to Color(0xFF52504D),
+                                                1.00f to Color(0xFF0A0A0A),
                                             ),
                                         ),
                                 )
@@ -830,6 +872,9 @@ fun DesktopEditorialLyrics(
     useEditorialSerif: Boolean = true,
     maxActiveSp: Float = 48f,
     lyricFontScale: Float = 1f,
+    positionMs: Long = 0L,
+    isPlaying: Boolean = false,
+    karaokeMode: DesktopKaraokeLyricMode = DesktopKaraokeLyricMode.SMART,
     modifier: Modifier = Modifier,
 ) {
     val activeLine = if (activeIdx in lyrics.indices) lyrics[activeIdx] else null
@@ -883,19 +928,68 @@ fun DesktopEditorialLyrics(
                 Text(pTxt, fontSize = (15.5f * lScale).sp, lineHeight = (22f * lScale).sp, fontFamily = family, fontStyle = effectiveStyle, color = mutedColor.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(12.dp))
             }
-            Text(
-                text = curTxt,
-                fontSize = dynamicSp.sp,
-                lineHeight = (dynamicSp * 1.24f).sp,
-                fontFamily = family,
-                fontStyle = effectiveStyle,
-                fontWeight = FontWeight.Bold,
-                color = if (highlightAccent) accentColor else activeColor,
-                textAlign = textAlign,
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            val lineStartMs = activeLine?.timeMs ?: 0L
+            val nextStartMs = nextLine?.timeMs ?: (lineStartMs + 4200L)
+            val lineDurMs = (nextStartMs - lineStartMs).coerceIn(1200L, 12000L)
+            val useKaraoke = when (karaokeMode) {
+                DesktopKaraokeLyricMode.CLASSIC -> false
+                DesktopKaraokeLyricMode.EXACT_ONLY -> !activeLine?.words.isNullOrEmpty()
+                DesktopKaraokeLyricMode.SMART -> true
+            }
+            val baseLitColor = if (highlightAccent) accentColor else activeColor
+            val unlitColor = mutedColor.copy(alpha = 0.45f)
+            val karaokeAnnotated = if (useKaraoke && curTxt.isNotEmpty() && positionMs > 0L) {
+                val exactWords = activeLine?.words.orEmpty()
+                if (exactWords.isNotEmpty()) {
+                    buildAnnotatedString {
+                        exactWords.forEach { w ->
+                            val progress = ((positionMs - w.startMs).toFloat() / (w.endMs - w.startMs).coerceAtLeast(1L)).coerceIn(0f, 1f)
+                            val c = lerp(unlitColor, baseLitColor, progress)
+                            withStyle(SpanStyle(color = c)) { append(w.text) }
+                        }
+                    }
+                } else {
+                    val progress = ((positionMs - lineStartMs).toFloat() / (lineDurMs * 0.88f)).coerceIn(0f, 1f)
+                    val litChars = (curTxt.length * progress).toInt().coerceIn(0, curTxt.length)
+                    buildAnnotatedString {
+                        if (litChars > 0) {
+                            withStyle(SpanStyle(color = baseLitColor)) { append(curTxt.substring(0, litChars)) }
+                        }
+                        if (litChars < curTxt.length) {
+                            withStyle(SpanStyle(color = unlitColor)) { append(curTxt.substring(litChars)) }
+                        }
+                    }
+                }
+            } else null
+
+            if (karaokeAnnotated != null) {
+                Text(
+                    text = karaokeAnnotated,
+                    fontSize = dynamicSp.sp,
+                    lineHeight = (dynamicSp * 1.24f).sp,
+                    fontFamily = family,
+                    fontStyle = effectiveStyle,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = textAlign,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Text(
+                    text = curTxt,
+                    fontSize = dynamicSp.sp,
+                    lineHeight = (dynamicSp * 1.24f).sp,
+                    fontFamily = family,
+                    fontStyle = effectiveStyle,
+                    fontWeight = FontWeight.Bold,
+                    color = baseLitColor,
+                    textAlign = textAlign,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             if (sTxt.isNotBlank()) {
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(sTxt, fontSize = (18f * lScale).sp, lineHeight = (26f * lScale).sp, fontFamily = family, fontStyle = effectiveStyle, color = secondaryColor.copy(alpha = 0.86f), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
@@ -1842,9 +1936,11 @@ fun DesktopSplashOverlay(visible: Boolean, darkMode: Boolean) {
                     Box(modifier = Modifier.align(Alignment.TopCenter).size(84.dp).clip(CircleShape).background(Color(0xFF0E0E10)).border(1.dp, Color.White.copy(alpha = 0.14f), CircleShape), contentAlignment = Alignment.Center) {
                         Box(modifier = Modifier.size(24.dp).clip(CircleShape).background(Color(0xFFA9321E)))
                     }
-                    Box(modifier = Modifier.size(88.dp).shadow(14.dp, RoundedCornerShape(10.dp)).clip(RoundedCornerShape(10.dp)).background(Color(0xFFA9321E)), contentAlignment = Alignment.Center) {
-                        Box(modifier = Modifier.size(34.dp).border(2.2.dp, Color(0xFFF4E8D4), CircleShape), contentAlignment = Alignment.Center) {
-                            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Color(0xFFF4E8D4)))
+                    Box(modifier = Modifier.size(88.dp).shadow(14.dp, RoundedCornerShape(12.dp)).clip(RoundedCornerShape(12.dp)).background(Color(0xFFA9321E)), contentAlignment = Alignment.Center) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                            listOf(14.dp, 26.dp, 36.dp, 24.dp, 16.dp).forEach { barH ->
+                                Box(modifier = Modifier.width(5.dp).height(barH).clip(CircleShape).background(Color(0xFFF4E8D4)))
+                            }
                         }
                     }
                 }
