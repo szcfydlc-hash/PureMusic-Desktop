@@ -811,7 +811,7 @@ fun main() = application {
                                                     .fillMaxWidth()
                                                     .clip(RoundedCornerShape(8.dp))
                                                     .desktopHoverClickable(shape = RoundedCornerShape(8.dp)) {
-                                                        activeDetail = DesktopDetail.PlaylistDetail(pl.id)
+                                                        activeDetail = DesktopDetailView.PlaylistView(pl.id)
                                                     }
                                                     .padding(horizontal = 8.dp, vertical = 6.dp),
                                                 verticalAlignment = Alignment.CenterVertically,
@@ -3566,7 +3566,7 @@ private fun DesktopSettingsPage(
                                     Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = ink)
                                     Text("回归音乐本身。本地离线 · 零广告 · 遵循 Apache-2.0 / LGPL-2.1 开源声明（详见 THIRD_PARTY_LICENSES.txt）。", fontSize = 12.sp, color = muted)
                                 }
-                                Text("v4.0.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                                Text("v4.0.1", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
                             }
                         }
                     }
