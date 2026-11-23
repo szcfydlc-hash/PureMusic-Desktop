@@ -440,78 +440,93 @@ fun DesktopSpinningVinylDisc(
     discSize: Dp,
     modifier: Modifier = Modifier,
 ) {
+    // Outer shadow & stationary studio lamp reflection stay FIXED in space;
+    // ONLY the vinyl grooves and center cover label rotate serenely underneath!
     Box(
         modifier = modifier
             .size(discSize)
-            .shadow(28.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.65f), spotColor = Color.Black)
-            .graphicsLayer { rotationZ = rotationDegrees },
+            .shadow(26.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.58f), spotColor = Color.Black)
+            .clip(CircleShape),
         contentAlignment = Alignment.Center,
     ) {
+        // Layer 1: Rotating 180g vinyl body + micro-grooves + center label
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { rotationZ = rotationDegrees },
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val r = size.minDimension / 2f
+                val c = Offset(size.width / 2f, size.height / 2f)
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        0.00f to Color(0xFF131315),
+                        0.56f to Color(0xFF0A0A0C),
+                        0.82f to Color(0xFF17171B),
+                        0.95f to Color(0xFF0E0E11),
+                        1.00f to Color(0xFF060608),
+                        center = c,
+                        radius = r,
+                    ),
+                    radius = r,
+                    center = c,
+                )
+                // 48 fine etched micro-grooves with realistic track-gap bands
+                for (g in 1..48) {
+                    val frac = 0.37f + g * 0.0125f
+                    val isTrackGap = g == 16 || g == 32
+                    drawCircle(
+                        color = Color.White.copy(alpha = if (isTrackGap) 0.10f else if (g % 4 == 0) 0.05f else 0.022f),
+                        radius = r * frac,
+                        center = c,
+                        style = Stroke(width = if (isTrackGap) 1.0f else 0.6f),
+                    )
+                }
+            }
+
+            DesktopAlbumCover(
+                filePath = filePath,
+                modifier = Modifier
+                    .size(discSize * 0.40f)
+                    .border(2.dp, Color(0xFF23211F), CircleShape),
+                cornerRadius = discSize * 0.20f,
+                iconSize = discSize * 0.14f,
+            )
+
+            Box(
+                modifier = Modifier
+                    .size(discSize * 0.062f)
+                    .clip(CircleShape)
+                    .background(Color(0xFF141312))
+                    .border(1.2.dp, Color(0xFFE4DCCB), CircleShape),
+            )
+        }
+
+        // Layer 2: STATIONARY anisotropic studio light sheen (never spins like a propeller!)
         Canvas(modifier = Modifier.fillMaxSize()) {
             val r = size.minDimension / 2f
             val c = Offset(size.width / 2f, size.height / 2f)
             drawCircle(
-                brush = Brush.radialGradient(
-                    0.00f to Color(0xFF141416),
-                    0.56f to Color(0xFF0A0A0C),
-                    0.82f to Color(0xFF19191D),
-                    0.95f to Color(0xFF0E0E11),
-                    1.00f to Color(0xFF050506),
-                    center = c,
-                    radius = r,
-                ),
-                radius = r,
-                center = c,
-            )
-            // 42 fine vinyl micro-grooves with realistic track-gap bands
-            for (g in 1..42) {
-                val frac = 0.37f + g * 0.0143f
-                val isTrackGap = g == 14 || g == 28
-                drawCircle(
-                    color = Color.White.copy(alpha = if (isTrackGap) 0.11f else if (g % 4 == 0) 0.055f else 0.025f),
-                    radius = r * frac,
-                    center = c,
-                    style = Stroke(width = if (isTrackGap) 1.1f else 0.65f),
-                )
-            }
-            // Crisp anisotropic studio light wedges (classic vinyl sheen)
-            drawCircle(
                 brush = Brush.sweepGradient(
                     0.00f to Color.Transparent,
-                    0.07f to Color.White.copy(alpha = 0.05f),
-                    0.12f to Color.White.copy(alpha = 0.22f),
-                    0.17f to Color.White.copy(alpha = 0.05f),
-                    0.24f to Color.Transparent,
+                    0.08f to Color.White.copy(alpha = 0.04f),
+                    0.13f to Color.White.copy(alpha = 0.18f),
+                    0.18f to Color.White.copy(alpha = 0.04f),
+                    0.25f to Color.Transparent,
                     0.50f to Color.Transparent,
-                    0.57f to Color.White.copy(alpha = 0.05f),
-                    0.62f to Color.White.copy(alpha = 0.19f),
-                    0.67f to Color.White.copy(alpha = 0.04f),
-                    0.74f to Color.Transparent,
+                    0.58f to Color.White.copy(alpha = 0.04f),
+                    0.63f to Color.White.copy(alpha = 0.15f),
+                    0.68f to Color.White.copy(alpha = 0.04f),
+                    0.75f to Color.Transparent,
                     1.00f to Color.Transparent,
                     center = c,
                 ),
                 radius = r * 0.97f,
                 center = c,
             )
-            drawCircle(color = Color.White.copy(alpha = 0.16f), radius = r - 0.8f, center = c, style = Stroke(1.3f))
+            drawCircle(color = Color.White.copy(alpha = 0.14f), radius = r - 0.8f, center = c, style = Stroke(1.1f))
         }
-
-        DesktopAlbumCover(
-            filePath = filePath,
-            modifier = Modifier
-                .size(discSize * 0.40f)
-                .border(2.dp, Color(0xFF23211F), CircleShape),
-            cornerRadius = discSize * 0.20f,
-            iconSize = discSize * 0.14f,
-        )
-
-        Box(
-            modifier = Modifier
-                .size(discSize * 0.062f)
-                .clip(CircleShape)
-                .background(Color(0xFF141312))
-                .border(1.3.dp, Color(0xFFE4DCCB), CircleShape),
-        )
     }
 }
 
