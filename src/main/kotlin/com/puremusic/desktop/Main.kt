@@ -267,30 +267,6 @@ fun main() = application {
 
     lateinit var engine: DesktopAudioEngine
 
-    fun playNextInQueue(song: DesktopSong) {
-        if (activeQueue.isEmpty() || currentIndex !in activeQueue.indices) {
-            playFromQueue(listOf(song), 0)
-            return
-        }
-        val mutable = activeQueue.toMutableList()
-        val insertPos = (currentIndex + 1).coerceIn(0, mutable.size)
-        mutable.add(insertPos, song)
-        activeQueue = mutable
-    }
-
-    fun openSongInExplorer(filePath: String) {
-        runCatching {
-            val f = File(filePath)
-            if (!f.exists()) return
-            val os = System.getProperty("os.name").lowercase()
-            if (os.contains("win")) {
-                ProcessBuilder("explorer.exe", "/select,", f.absolutePath).start()
-            } else if (java.awt.Desktop.isDesktopSupported()) {
-                java.awt.Desktop.getDesktop().open(f.parentFile ?: f)
-            }
-        }
-    }
-
     fun playFromQueue(queue: List<DesktopSong>, index: Int) {
         if (queue.isEmpty() || index !in queue.indices) return
         val song = queue[index]
@@ -321,6 +297,30 @@ fun main() = application {
                 hourlyPlays = nextHourly,
                 lastSongPath = song.filePath,
             )
+        }
+    }
+
+    fun playNextInQueue(song: DesktopSong) {
+        if (activeQueue.isEmpty() || currentIndex !in activeQueue.indices) {
+            playFromQueue(listOf(song), 0)
+            return
+        }
+        val mutable = activeQueue.toMutableList()
+        val insertPos = (currentIndex + 1).coerceIn(0, mutable.size)
+        mutable.add(insertPos, song)
+        activeQueue = mutable
+    }
+
+    fun openSongInExplorer(filePath: String) {
+        runCatching {
+            val f = File(filePath)
+            if (!f.exists()) return
+            val os = System.getProperty("os.name").lowercase()
+            if (os.contains("win")) {
+                ProcessBuilder("explorer.exe", "/select,", f.absolutePath).start()
+            } else if (java.awt.Desktop.isDesktopSupported()) {
+                java.awt.Desktop.getDesktop().open(f.parentFile ?: f)
+            }
         }
     }
 
