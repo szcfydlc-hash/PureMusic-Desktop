@@ -4262,21 +4262,46 @@ private fun UnifiedImmersiveStage(
         DesktopSceneStyle.VINYL_STUDY -> isDarkTheme
         DesktopSceneStyle.VINYL_LIGHTFIELD, DesktopSceneStyle.SPATIAL_GALLERY, DesktopSceneStyle.POSTER_WALL -> true
     }
-    val extractedMood = rememberSongDominantColor(song.filePath)
+    val (extractedMood, extractedGlow) = rememberSongDynamicPalette(song.filePath)
     val animatedMood by animateColorAsState(targetValue = extractedMood, animationSpec = tween(650), label = "immMood")
+    val animatedGlow by animateColorAsState(targetValue = extractedGlow, animationSpec = tween(650), label = "immGlow")
     val bgBrush = when (sceneStyle) {
         DesktopSceneStyle.VINYL_STUDY -> if (isDarkTheme) {
-            Brush.verticalGradient(listOf(lerp(Color(0xFF1B2328), animatedMood, 0.44f), lerp(Color(0xFF12181C), animatedMood, 0.28f), lerp(Color(0xFF0A0F12), animatedMood, 0.14f)))
+            Brush.verticalGradient(
+                listOf(
+                    lerp(Color(0xFF151C22), animatedMood, 0.62f),
+                    lerp(Color(0xFF0F151B), animatedMood, 0.42f),
+                    lerp(Color(0xFF0A0E13), animatedMood, 0.24f),
+                ),
+            )
         } else {
             Brush.verticalGradient(listOf(Color(0xFFF5F0E6), Color(0xFFF5F0E6)))
         }
-        DesktopSceneStyle.VINYL_LIGHTFIELD -> Brush.verticalGradient(listOf(lerp(Color(0xFF1D1615), animatedMood, 0.50f), lerp(Color(0xFF140F0F), animatedMood, 0.30f), Color(0xFF0C0A0A)))
-        DesktopSceneStyle.SPATIAL_GALLERY -> Brush.verticalGradient(listOf(lerp(Color(0xFF181214), animatedMood, 0.42f), lerp(Color(0xFF100C0E), animatedMood, 0.24f), Color(0xFF090809)))
-        DesktopSceneStyle.POSTER_WALL -> Brush.verticalGradient(listOf(Color(0xFF0E1116), Color(0xFF0A0C10)))
+        DesktopSceneStyle.VINYL_LIGHTFIELD -> Brush.verticalGradient(
+            listOf(
+                lerp(Color(0xFF181518), animatedMood, 0.66f),
+                lerp(Color(0xFF110F14), animatedMood, 0.46f),
+                lerp(Color(0xFF0A0B0F), animatedMood, 0.26f),
+            ),
+        )
+        DesktopSceneStyle.SPATIAL_GALLERY -> Brush.verticalGradient(
+            listOf(
+                lerp(Color(0xFF16161C), animatedMood, 0.62f),
+                lerp(Color(0xFF0F1016), animatedMood, 0.42f),
+                lerp(Color(0xFF0A0B10), animatedMood, 0.24f),
+            ),
+        )
+        DesktopSceneStyle.POSTER_WALL -> Brush.verticalGradient(
+            listOf(
+                lerp(Color(0xFF141820), animatedMood, 0.58f),
+                lerp(Color(0xFF0E1117), animatedMood, 0.40f),
+                lerp(Color(0xFF090B10), animatedMood, 0.24f),
+            ),
+        )
     }
     val primaryInk = if (isDarkScene) Color(0xFFF4EFE6) else MaterialTheme.colorScheme.onBackground
-    val secondaryInk = if (isDarkScene) Color(0xFFB3ABA0) else MaterialTheme.colorScheme.onSurfaceVariant
-    val activeAccent = if (isDarkScene) Color(0xFFE5C487) else accentColor
+    val secondaryInk = if (isDarkScene) lerp(Color(0xFFB8B2A7), animatedGlow, 0.16f) else MaterialTheme.colorScheme.onSurfaceVariant
+    val activeAccent = if (isDarkScene) lerp(Color(0xFFE8C88E), animatedGlow, 0.44f) else accentColor
 
     var menuExpanded by remember { mutableStateOf(false) }
     var lastPointerMoveMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -4290,10 +4315,47 @@ private fun UnifiedImmersiveStage(
         }
     }
 
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bgBrush),
+    ) {
+        if (isDarkScene) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                // Left-upper highlight orb glowing behind album sleeve & vinyl
+                drawRect(
+                    brush = Brush.radialGradient(
+                        0.00f to animatedGlow.copy(alpha = 0.36f),
+                        0.45f to animatedMood.copy(alpha = 0.18f),
+                        0.85f to Color.Transparent,
+                        center = Offset(size.width * 0.19f, size.height * 0.42f),
+                        radius = size.maxDimension * 0.54f,
+                    ),
+                )
+                // Right-center primary atmospheric wash behind lyrics & spectrum
+                drawRect(
+                    brush = Brush.radialGradient(
+                        0.00f to animatedMood.copy(alpha = 0.32f),
+                        0.50f to animatedGlow.copy(alpha = 0.11f),
+                        0.88f to Color.Transparent,
+                        center = Offset(size.width * 0.76f, size.height * 0.34f),
+                        radius = size.maxDimension * 0.58f,
+                    ),
+                )
+                // Soft warm floor horizon accent behind bottom spectrum
+                drawRect(
+                    brush = Brush.radialGradient(
+                        0.00f to animatedGlow.copy(alpha = 0.18f),
+                        0.62f to Color.Transparent,
+                        center = Offset(size.width * 0.68f, size.height * 0.86f),
+                        radius = size.maxDimension * 0.42f,
+                    ),
+                )
+            }
+        }
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(bgBrush)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
@@ -4418,6 +4480,8 @@ private fun UnifiedImmersiveStage(
                     lyrics = lyrics,
                     activeLyricIdx = activeLyricIdx,
                     accentColor = activeAccent,
+                    dynamicMood = animatedMood,
+                    dynamicGlow = animatedGlow,
                     lyricFontScale = lyricFontScale,
                     onSelectSong = onSelectSong,
                     onTogglePlayPause = onTogglePlayPause,
@@ -4710,5 +4774,6 @@ private fun UnifiedImmersiveStage(
                 onToggleSpectrum = onToggleSpectrum,
             )
         }
+    }
     }
 }

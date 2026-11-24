@@ -279,6 +279,135 @@ fun rememberSongDominantColor(filePath: String?, fallback: Color = Color(0xFF7B8
     return dominant
 }
 
+
+private val dynamicPaletteCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Color, Color>>()
+
+/**
+ * Dual-tone dominant & complementary highlight palette extractor (24-bin HSV histogram)
+ * so Desktop dark playback scenes glow with rich, breathable cover-extracted color instead of flat black.
+ */
+@Composable
+fun rememberSongDynamicPalette(
+    filePath: String?,
+    fallbackPrimary: Color = Color(0xFF2B5B6C),
+    fallbackSecondary: Color = Color(0xFFD69454),
+): Pair<Color, Color> {
+    val bmp = rememberSongArtwork(filePath)
+    var palette by remember(filePath) {
+        mutableStateOf(filePath?.let { dynamicPaletteCache[it] } ?: (fallbackPrimary to fallbackSecondary))
+    }
+    LaunchedEffect(filePath, bmp) {
+        if (filePath == null || bmp == null) {
+            palette = fallbackPrimary to fallbackSecondary
+            return@LaunchedEffect
+        }
+        dynamicPaletteCache[filePath]?.let {
+            palette = it
+            return@LaunchedEffect
+        }
+        val computed = withContext(Dispatchers.Default) {
+            runCatching {
+                val pm = bmp.toPixelMap()
+                val stepX = (pm.width / 28).coerceAtLeast(1)
+                val stepY = (pm.height / 28).coerceAtLeast(1)
+                val binCount = 24
+                val binW = FloatArray(binCount)
+                val binSin = FloatArray(binCount)
+                val binCos = FloatArray(binCount)
+                val binSat = FloatArray(binCount)
+                val binVal = FloatArray(binCount)
+
+                var y = 0
+                while (y < pm.height) {
+                    var x = 0
+                    while (x < pm.width) {
+                        val c = pm[x, y]
+                        val maxC = max(c.red, max(c.green, c.blue))
+                        val minC = minOf(c.red, minOf(c.green, c.blue))
+                        val delta = maxC - minC
+                        val sat = if (maxC > 0.001f) delta / maxC else 0f
+                        val v = maxC
+                        if (v >= 0.12f && !(v > 0.97f && sat < 0.06f) && sat >= 0.08f) {
+                            var hue = when {
+                                delta < 0.0001f -> 0f
+                                maxC == c.red -> 60f * (((c.green - c.blue) / delta) % 6f)
+                                maxC == c.green -> 60f * (((c.blue - c.red) / delta) + 2f)
+                                else -> 60f * (((c.red - c.green) / delta) + 4f)
+                            }
+                            if (hue < 0f) hue += 360f
+                            val bin = ((hue / 15f).toInt()).coerceIn(0, binCount - 1)
+                            val rad = Math.toRadians(hue.toDouble())
+                            val w = 0.30f + sat * 1.10f + v * 0.25f
+                            binW[bin] += w
+                            binSin[bin] += (sin(rad) * w).toFloat()
+                            binCos[bin] += (cos(rad) * w).toFloat()
+                            binSat[bin] += sat * w
+                            binVal[bin] += v * w
+                        }
+                        x += stepX
+                    }
+                    y += stepY
+                }
+
+                fun extractFromBin(centerBin: Int, minSat: Float, maxSat: Float, minVal: Float, maxVal: Float): Color {
+                    var tot = 0f; var sSin = 0f; var sCos = 0f; var sSat = 0f; var sVal = 0f
+                    for (off in -1..1) {
+                        val idx = (centerBin + off + binCount) % binCount
+                        val f = if (off == 0) 1f else 0.45f
+                        tot += binW[idx] * f
+                        sSin += binSin[idx] * f
+                        sCos += binCos[idx] * f
+                        sSat += binSat[idx] * f
+                        sVal += binVal[idx] * f
+                    }
+                    if (tot <= 0f) return fallbackPrimary
+                    var avgHue = Math.toDegrees(atan2(sSin.toDouble(), sCos.toDouble())).toFloat()
+                    if (avgHue < 0f) avgHue += 360f
+                    val avgSat = (sSat / tot).coerceIn(minSat, maxSat)
+                    val avgVal = (sVal / tot).coerceIn(minVal, maxVal)
+                    return Color.hsv(avgHue, avgSat, avgVal)
+                }
+
+                var bestBin = -1
+                var bestW = 0f
+                for (i in 0 until binCount) {
+                    if (binW[i] > bestW) {
+                        bestW = binW[i]
+                        bestBin = i
+                    }
+                }
+                if (bestBin < 0 || bestW <= 0f) return@runCatching fallbackPrimary to fallbackSecondary
+
+                // Primary rich atmospheric color
+                val primary = extractFromBin(bestBin, 0.36f, 0.68f, 0.48f, 0.72f)
+
+                // Find distinct secondary highlight bin at least 3 bins (~45 deg) away
+                var secondBin = -1
+                var secondW = 0f
+                for (i in 0 until binCount) {
+                    val dist = minOf((i - bestBin + binCount) % binCount, (bestBin - i + binCount) % binCount)
+                    if (dist >= 3 && binW[i] > secondW) {
+                        secondW = binW[i]
+                        secondBin = i
+                    }
+                }
+                val secondary = if (secondBin >= 0 && secondW > bestW * 0.14f) {
+                    extractFromBin(secondBin, 0.42f, 0.76f, 0.58f, 0.84f)
+                } else {
+                    // Harmonious warm/cool analogous lift for monochrome covers
+                    var h = Math.toDegrees(atan2(binSin[bestBin].toDouble(), binCos[bestBin].toDouble())).toFloat()
+                    if (h < 0f) h += 360f
+                    Color.hsv((h + 34f) % 360f, 0.48f, 0.78f)
+                }
+                primary to secondary
+            }.getOrDefault(fallbackPrimary to fallbackSecondary)
+        }
+        dynamicPaletteCache[filePath] = computed
+        palette = computed
+    }
+    return palette
+}
+
 /**
  * Ultra-refined 2.5dp Desktop Sleek Slider (replaces chunky mobile Material3 Slider everywhere on Desktop).
  */
@@ -1024,6 +1153,8 @@ fun DesktopPosterWallStage(
     lyrics: List<LyricLine>,
     activeLyricIdx: Int,
     accentColor: Color,
+    dynamicMood: Color = Color(0xFF2B5B6C),
+    dynamicGlow: Color = Color(0xFFD69454),
     lyricFontScale: Float = 1f,
     onSelectSong: (DesktopSong) -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -1079,7 +1210,7 @@ fun DesktopPosterWallStage(
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = if (tileSong.id == currentSong.id) 0.14f else 0.46f)),
+                                    .background(androidx.compose.ui.graphics.lerp(Color(0xFF0A0D12), dynamicMood, 0.48f).copy(alpha = if (tileSong.id == currentSong.id) 0.18f else 0.58f)),
                             )
                         }
                     }
