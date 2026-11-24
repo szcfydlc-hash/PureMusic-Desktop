@@ -66,6 +66,7 @@ import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.foundation.Image
@@ -507,9 +508,15 @@ fun main() = application {
     var vinylAngleDeg by remember { mutableFloatStateOf(0f) }
     var vinylVelocity by remember { mutableFloatStateOf(0f) }
     val isPlayingForVinyl = playerState.isPlaying
-    LaunchedEffect(isPlayingForVinyl) {
+    val targetVinylRpm = config.immersiveVinylRpm
+    LaunchedEffect(isPlayingForVinyl, targetVinylRpm) {
         var lastNanos = 0L
-        val targetVel = if (isPlayingForVinyl) 14f else 0f // Serene 14 deg/s (~25.7s per rotation)
+        val baseDegPerSec = when (targetVinylRpm) {
+            78 -> 24f
+            45 -> 16f
+            else -> 11f
+        }
+        val targetVel = if (isPlayingForVinyl) baseDegPerSec else 0f
         while (isActive && (isPlayingForVinyl || vinylVelocity > 0.10f)) {
             withFrameNanos { nanos ->
                 val dt = if (lastNanos == 0L) 0f else ((nanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
@@ -526,12 +533,13 @@ fun main() = application {
     val rawAccent = Color(config.accentColor.hex)
     val (pBg, pSide, pSurf, pVar, pOut) = if (config.darkMode) {
         when (config.accentColor) {
-            DesktopAccentColor.CINNABAR -> arrayOf(Color(0xFF161413), Color(0xFF110F0E), Color(0xFF1D1B19), Color(0xFF262320), Color(0xFF302C28))
-            DesktopAccentColor.PINE_GREEN -> arrayOf(Color(0xFF121715), Color(0xFF0E1211), Color(0xFF181F1D), Color(0xFF212A27), Color(0xFF2B3531))
-            DesktopAccentColor.PRUSSIAN_BLUE -> arrayOf(Color(0xFF12151A), Color(0xFF0E1014), Color(0xFF181C22), Color(0xFF20262E), Color(0xFF2A313C))
-            DesktopAccentColor.WALNUT -> arrayOf(Color(0xFF161411), Color(0xFF12100D), Color(0xFF1E1B17), Color(0xFF28241E), Color(0xFF332D26))
-            DesktopAccentColor.OCHRE_GOLD -> arrayOf(Color(0xFF171511), Color(0xFF12100D), Color(0xFF1F1C17), Color(0xFF29251E), Color(0xFF342F26))
-            DesktopAccentColor.PURE_INK -> arrayOf(Color(0xFF141414), Color(0xFF0F0F0F), Color(0xFF1C1C1C), Color(0xFF252525), Color(0xFF2F2F2F))
+            // Breathable Warm Night-Reading Charcoal-Slate (zero harsh pitch black!)
+            DesktopAccentColor.CINNABAR -> arrayOf(Color(0xFF1E2025), Color(0xFF181A1F), Color(0xFF262931), Color(0xFF30343E), Color(0xFF3E434F))
+            DesktopAccentColor.PINE_GREEN -> arrayOf(Color(0xFF1B2120), Color(0xFF161B1A), Color(0xFF232B2A), Color(0xFF2C3635), Color(0xFF3B4644))
+            DesktopAccentColor.PRUSSIAN_BLUE -> arrayOf(Color(0xFF1B2028), Color(0xFF161A21), Color(0xFF232934), Color(0xFF2C3442), Color(0xFF3A4454))
+            DesktopAccentColor.WALNUT -> arrayOf(Color(0xFF201E1C), Color(0xFF1A1816), Color(0xFF292623), Color(0xFF34302C), Color(0xFF433E39))
+            DesktopAccentColor.OCHRE_GOLD -> arrayOf(Color(0xFF201F1C), Color(0xFF1A1916), Color(0xFF292723), Color(0xFF34312B), Color(0xFF433F37))
+            DesktopAccentColor.PURE_INK -> arrayOf(Color(0xFF1D2026), Color(0xFF171A20), Color(0xFF252932), Color(0xFF2F3440), Color(0xFF3E4452))
         }
     } else {
         when (config.accentColor) {
@@ -750,7 +758,7 @@ fun main() = application {
                                                 color = MaterialTheme.colorScheme.onBackground,
                                             )
                                             Text(
-                                                text = "PureMusic v4.2",
+                                                text = "PureMusic v4.3",
                                                 fontSize = 10.5.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
                                             )
@@ -920,7 +928,9 @@ fun main() = application {
                                     Text("导入音乐目录", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onBackground)
                                 }
                                 Text(
-                                    text = if (isScanning) "正在扫描曲库..." else "${allSongs.size} 首本地音乐 · ${albums.size} 张专辑",
+                                    text = if (isScanning) "正在扫描曲库..." else "${allSongs.size} 曲目 · ${albums.size} 专辑",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                                     modifier = Modifier.padding(start = 2.dp, top = 2.dp),
@@ -1272,6 +1282,31 @@ fun main() = application {
                             showSpectrum = showSpectrumInImmersive,
                             lyricOffsetMs = currentLyricOffset,
                             lyricFontScale = config.lyricFontScale,
+                            coverScale = config.immersiveCoverScale,
+                            moodStrength = config.immersiveMoodStrength,
+                            lyricLines = config.immersiveLyricLines,
+                            spectrumHeightMode = config.immersiveSpectrumHeight,
+                            matteCover = config.immersiveMatteCover,
+                            vinylRpm = config.immersiveVinylRpm,
+                            onUpdateCoverScale = { v -> updateConfig { it.copy(immersiveCoverScale = v.coerceIn(0.80f, 1.25f)) } },
+                            onUpdateMoodStrength = { v -> updateConfig { it.copy(immersiveMoodStrength = v.coerceIn(0.0f, 1.0f)) } },
+                            onUpdateLyricLines = { n -> updateConfig { it.copy(immersiveLyricLines = n) } },
+                            onUpdateSpectrumHeight = { m -> updateConfig { it.copy(immersiveSpectrumHeight = m) } },
+                            onToggleMatteCover = { b -> updateConfig { it.copy(immersiveMatteCover = b) } },
+                            onUpdateVinylRpm = { rpm -> updateConfig { it.copy(immersiveVinylRpm = rpm) } },
+                            onResetImmersivePreset = {
+                                updateConfig {
+                                    it.copy(
+                                        immersiveCoverScale = 1.0f,
+                                        immersiveMoodStrength = 0.80f,
+                                        immersiveLyricLines = 5,
+                                        immersiveSpectrumHeight = 1,
+                                        immersiveMatteCover = true,
+                                        immersiveVinylRpm = 33,
+                                        lyricFontScale = 1.0f,
+                                    )
+                                }
+                            },
                             isDarkTheme = config.darkMode,
                             accentColor = MaterialTheme.colorScheme.primary,
                             isFullscreen = mainWindowState.placement == WindowPlacement.Fullscreen,
@@ -2257,6 +2292,11 @@ private fun DesktopLibraryPage(
                         }
                         Column(modifier = Modifier.fillMaxSize()) {
                             // Crisp Desktop Multi-Column Table Header
+                            BookbindingCard(
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                cornerRadius = 14.dp,
+                                contentPadding = PaddingValues(top = 8.dp, bottom = 4.dp, start = 6.dp, end = 6.dp),
+                            ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -2312,6 +2352,7 @@ private fun DesktopLibraryPage(
                             }
                             DesktopThinScrollbar(listState = listState, modifier = Modifier.align(Alignment.CenterEnd))
                         }
+                            }
                         }
                     }
                 }
@@ -2415,6 +2456,7 @@ private fun BookTrackRow(
     onOpenFolder: () -> Unit = {},
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    var customizerOpen by remember { mutableStateOf(false) }
     val hoverSrc = remember { MutableInteractionSource() }
     val hovered by hoverSrc.collectIsHoveredAsState()
     val rowShape = RoundedCornerShape(10.dp)
@@ -2901,293 +2943,321 @@ private fun DesktopPlaylistsPage(
     onRenamePlaylist: (DesktopPlaylist) -> Unit,
     onDeletePlaylist: (DesktopPlaylist) -> Unit,
 ) {
-    val cardShape = RoundedCornerShape(12.dp)
     val surface = MaterialTheme.colorScheme.surface
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
     val ink = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val isDark = MaterialTheme.colorScheme.background.red < 0.35f
 
-    val favDurationMs = remember(favoriteSongs) { favoriteSongs.sumOf { it.durationMs.coerceAtLeast(0L) } }
-    val favSub = remember(favoriteSongs.size, favDurationMs) {
+    val favSub = remember(favoriteSongs.size) {
         if (favoriteSongs.isEmpty()) "暂无珍藏 · 点击心形收藏喜爱曲目"
-        else {
-            val mins = (favDurationMs / 60_000L).toInt()
-            val h = mins / 60; val m = mins % 60
-            "${favoriteSongs.size} 首珍藏 · " + if (h > 0) "${h}小时${m}分" else "${mins.coerceAtLeast(1)}分钟"
-        }
+        else "${favoriteSongs.size} 首珍藏曲目"
     }
     val totalPlays = remember(playCounts) { playCounts.values.sum() }
     val hoursText = remember(allSongs, playCounts) {
         val byPath = allSongs.associateBy { it.filePath }
         val ms = playCounts.entries.sumOf { (p, c) -> (byPath[p]?.durationMs ?: 210_000L) * c }
         val h = ms / 3_600_000.0
-        when {
-            ms <= 0L -> "0 分钟"
-            h < 1.0 -> "${(ms / 60_000L).coerceAtLeast(1L)} 分钟"
-            else -> String.format(Locale.US, "%.1f 小时", h)
+        if (h < 0.1) "0.0 小时" else String.format(Locale.US, "%.1f 小时", h)
+    }
+    val sparkBars = remember(hourlyPlays) {
+        val buckets = FloatArray(7) { b ->
+            val startH = b * 3
+            var sum = 0
+            for (h in startH until (startH + 3).coerceAtMost(24)) sum += (hourlyPlays[h] ?: 0)
+            sum.toFloat()
         }
+        val maxV = buckets.maxOrNull()?.coerceAtLeast(1f) ?: 1f
+        if (buckets.all { it == 0f }) floatArrayOf(0.45f, 0.72f, 0.58f, 0.38f, 0.64f, 0.88f, 0.50f)
+        else FloatArray(7) { (buckets[it] / maxV).coerceIn(0.18f, 1f) }
     }
 
-    val listState = rememberLazyListState()
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxHeight().widthIn(max = 1180.dp).fillMaxWidth().padding(horizontal = 36.dp),
-            contentPadding = PaddingValues(vertical = 26.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .widthIn(max = 1220.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 32.dp, vertical = 18.dp),
         ) {
-            item(key = "pl_hdr") {
-                Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
-                        Column {
-                            Text("歌单", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = ink)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Box(modifier = Modifier.width(34.dp).height(2.dp).background(ink))
-                        }
-                        Text(
-                            text = "+ 新建歌单",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = accent,
-                            modifier = Modifier
-                                .padding(bottom = 6.dp)
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable(onClick = onCreatePlaylist),
-                        )
-                    }
-                    HorizontalDivider(thickness = 0.6.dp, color = outline)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("歌单", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = ink)
+                    Text("${playlists.size} 个自建歌单", fontSize = 12.5.sp, color = muted, modifier = Modifier.padding(bottom = 4.dp))
                 }
+                BookbindingPillButton(
+                    text = "新建歌单",
+                    leadingIcon = Icons.Rounded.Add,
+                    onClick = onCreatePlaylist,
+                )
             }
 
-            // Top Widescreen Collector Row: Left 62% Light Washi Vinyl Hero Card + Right 38% Stacked Slim Pills
-            item(key = "pl_bento_v4") {
-                val heroShape = RoundedCornerShape(16.dp)
-                val pillShape = RoundedCornerShape(14.dp)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth().height(216.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                BookbindingCard(
+                    modifier = Modifier
+                        .weight(2f)
+                        .fillMaxHeight()
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = onOpenFavorites),
+                    cornerRadius = 14.dp,
+                    contentPadding = PaddingValues(20.dp),
                 ) {
-                    // Left: Light Washi Vinyl Hero Card ("我喜欢的音乐")
                     Row(
-                        modifier = Modifier
-                            .weight(1.55f)
-                            .height(132.dp)
-                            .shadow(5.dp, heroShape, ambientColor = Color.Black.copy(alpha = 0.08f))
-                            .clip(heroShape)
-                            .background(surface)
-                            .border(0.7.dp, outline, heroShape)
-                            .desktopHoverClickable(shape = heroShape, onClick = onOpenFavorites)
-                            .padding(horizontal = 22.dp, vertical = 18.dp),
+                        modifier = Modifier.fillMaxSize(),
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(22.dp),
                     ) {
-                        // Mini Cinnabar Vinyl Sleeve + Peeking 180g Black LP
-                        Box(modifier = Modifier.width(114.dp).height(88.dp), contentAlignment = Alignment.CenterStart) {
-                            Canvas(modifier = Modifier.align(Alignment.CenterEnd).size(80.dp)) {
-                                val r = size.minDimension / 2f
-                                val c = Offset(r, r)
-                                drawCircle(
-                                    brush = Brush.radialGradient(
-                                        0.0f to Color(0xFF0A0A0B),
-                                        0.68f to Color(0xFF17171A),
-                                        0.90f to Color(0xFF242428),
-                                        1.0f to Color(0xFF0A0A0B),
-                                        center = c,
-                                        radius = r,
-                                    ),
-                                    radius = r,
-                                    center = c,
-                                )
-                                for (g in 1..6) {
-                                    drawCircle(Color.White.copy(alpha = 0.07f), radius = r * (0.52f + g * 0.065f), center = c, style = Stroke(0.7f))
-                                }
-                            }
+                        Box(modifier = Modifier.width(156.dp).height(126.dp), contentAlignment = Alignment.CenterStart) {
                             Box(
                                 modifier = Modifier
-                                    .size(84.dp)
-                                    .shadow(8.dp, RoundedCornerShape(8.dp), ambientColor = Color.Black.copy(alpha = 0.22f))
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(accent),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(Icons.Rounded.Favorite, contentDescription = null, tint = Color(0xFFF6F2EA), modifier = Modifier.size(32.dp))
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(20.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("我喜欢的音乐", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = ink)
-                            Spacer(modifier = Modifier.height(5.dp))
-                            Text(favSub, fontSize = 12.5.sp, color = muted)
-                        }
-                        if (favoriteSongs.isNotEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
+                                    .align(Alignment.CenterEnd)
+                                    .size(114.dp)
                                     .clip(CircleShape)
-                                    .border(1.2.dp, accent.copy(alpha = 0.78f), CircleShape)
-                                    .pointerHoverIcon(PointerIcon.Hand)
-                                    .clickable(onClick = onPlayFavorites),
+                                    .background(Brush.radialGradient(listOf(Color(0xFF28282C), Color(0xFF121214), Color(0xFF0A0A0B))))
+                                    .border(0.8.dp, Color.White.copy(alpha = 0.14f), CircleShape),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Icon(Icons.Rounded.PlayArrow, contentDescription = "播放我喜欢的音乐", tint = accent, modifier = Modifier.size(22.dp))
+                                Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(accent.copy(alpha = 0.85f)))
                             }
-                        }
-                    }
-
-                    // Right: Two Slim Stacked Shortcut Pills (最近播放 + 听歌报告)
-                    Column(
-                        modifier = Modifier.weight(1f).height(132.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .clip(pillShape)
-                                .background(surface)
-                                .border(0.7.dp, outline, pillShape)
-                                .desktopHoverClickable(shape = pillShape, onClick = onOpenRecent)
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            DesktopAlbumCover(
-                                filePath = recentSongs.firstOrNull()?.filePath,
-                                modifier = Modifier.size(36.dp),
-                                cornerRadius = 8.dp,
-                                iconSize = 16.dp,
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("最近播放", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = ink)
-                                Text(
-                                    text = if (recentSongs.isNotEmpty()) "${recentSongs.size} 首 · ${recentSongs.first().title}" else "暂无播放记录",
-                                    fontSize = 11.5.sp,
-                                    color = muted,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .clip(pillShape)
-                                .background(surface)
-                                .border(0.7.dp, outline, pillShape)
-                                .desktopHoverClickable(shape = pillShape, onClick = onOpenReport)
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
                             Box(
-                                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(accent.copy(alpha = 0.10f)),
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .size(122.dp)
+                                    .shadow(10.dp, RoundedCornerShape(10.dp))
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF1D1C1B))
+                                    .border(0.7.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(2.5.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    listOf(8.dp, 16.dp, 12.dp, 18.dp, 9.dp).forEach { bh ->
-                                        Box(modifier = Modifier.width(2.5.dp).height(bh).clip(CircleShape).background(accent))
-                                    }
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("听歌报告", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = ink)
-                                Text("$hoursText · $totalPlays 次播放", fontSize = 11.5.sp, color = muted, maxLines = 1)
+                                Icon(Icons.Rounded.Favorite, contentDescription = null, tint = Color(0xFFF6F2EA), modifier = Modifier.size(34.dp))
                             }
                         }
-                    }
-                }
-            }
 
-            item(key = "user_pl_hdr") {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("自建歌单", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = ink)
-                    Text("${playlists.size} 个", fontSize = 12.sp, color = muted)
-                }
-            }
-
-            if (playlists.isEmpty()) {
-                item(key = "empty_pl") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(surface)
-                            .border(0.7.dp, outline, RoundedCornerShape(12.dp))
-                            .desktopHoverClickable(shape = RoundedCornerShape(12.dp), onClick = onCreatePlaylist)
-                            .padding(vertical = 22.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Rounded.Add, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("新建你的第一个自建歌单", style = MaterialTheme.typography.bodyMedium, color = muted)
-                    }
-                }
-            } else {
-                val rows = playlists.chunked(2)
-                items(rows, key = { row -> row.joinToString("_") { it.id } }) { rowItems ->
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                        rowItems.forEach { pl ->
-                            val coverPath = pl.songPaths.firstOrNull { it in songsByPath }
-                            var menuOpen by remember { mutableStateOf(false) }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .desktopHoverClickable(shape = RoundedCornerShape(10.dp)) { onOpenPlaylist(pl) }
-                                        .padding(vertical = 8.dp, horizontal = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    // Compact 58dp Square Cover + Subtle Peeking Vinyl Edge
-                                    Box(modifier = Modifier.width(72.dp).height(58.dp), contentAlignment = Alignment.CenterStart) {
-                                        Canvas(modifier = Modifier.align(Alignment.CenterEnd).size(52.dp)) {
-                                            val r = size.minDimension / 2f
-                                            drawCircle(Color(0xFF141416), radius = r, center = Offset(r, r))
-                                            drawCircle(Color.White.copy(alpha = 0.08f), radius = r * 0.72f, center = Offset(r, r), style = Stroke(0.6f))
-                                        }
+                        Column(
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            verticalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column {
+                                Text("我喜欢的音乐", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(favSub, fontSize = 12.5.sp, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            if (favoriteSongs.isNotEmpty()) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    favoriteSongs.take(4).forEach { s ->
                                         DesktopAlbumCover(
-                                            filePath = coverPath,
-                                            modifier = Modifier.size(58.dp).shadow(4.dp, RoundedCornerShape(6.dp)),
+                                            filePath = s.filePath,
+                                            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)),
                                             cornerRadius = 6.dp,
-                                            iconSize = 22.dp,
+                                            iconSize = 14.dp,
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(14.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(pl.name, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Text("${pl.songPaths.size} 首", fontSize = 12.sp, color = muted)
-                                    }
-                                    Box {
-                                        IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand)) {
-                                            Icon(Icons.Rounded.MoreVert, contentDescription = "操作", tint = muted, modifier = Modifier.size(16.dp))
-                                        }
-                                        DropdownMenu(
-                                            expanded = menuOpen,
-                                            onDismissRequest = { menuOpen = false },
-                                            modifier = Modifier.background(surface, RoundedCornerShape(12.dp)).border(0.6.dp, outline, RoundedCornerShape(12.dp)),
-                                        ) {
-                                            DropdownMenuItem(text = { Text("重命名") }, onClick = { menuOpen = false; onRenamePlaylist(pl) })
-                                            DropdownMenuItem(text = { Text("删除歌单", color = accent) }, onClick = { menuOpen = false; onDeletePlaylist(pl) })
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                BookbindingPillButton(
+                                    text = "播放全部",
+                                    primary = true,
+                                    leadingIcon = Icons.Rounded.PlayArrow,
+                                    onClick = onPlayFavorites,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                BookbindingCard(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = onOpenRecent),
+                    cornerRadius = 14.dp,
+                    contentPadding = PaddingValues(14.dp),
+                ) {
+                    val rec4 = recentSongs.take(4)
+                    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                        Box(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))) {
+                            if (rec4.isEmpty()) {
+                                Icon(Icons.Rounded.History, contentDescription = null, tint = muted, modifier = Modifier.align(Alignment.Center).size(30.dp))
+                            } else {
+                                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    for (r in 0..1) {
+                                        Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            for (c in 0..1) {
+                                                val s = rec4.getOrNull(r * 2 + c) ?: rec4.first()
+                                                DesktopAlbumCover(filePath = s.filePath, modifier = Modifier.weight(1f).fillMaxHeight(), cornerRadius = 4.dp, iconSize = 14.dp)
+                                            }
                                         }
                                     }
                                 }
-                                HorizontalDivider(thickness = 0.5.dp, color = outline.copy(alpha = 0.7f))
                             }
                         }
-                        repeat(2 - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("最近播放", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1)
+                        Text(
+                            text = "${recentSongs.size} 首 · ${recentSongs.firstOrNull()?.title ?: "暂无记录"}",
+                            fontSize = 11.5.sp,
+                            color = muted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                BookbindingCard(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = onOpenReport),
+                    cornerRadius = 14.dp,
+                    contentPadding = PaddingValues(16.dp),
+                ) {
+                    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                        Text("听歌报告", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = ink)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().height(76.dp).padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            sparkBars.forEachIndexed { idx, frac ->
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(frac)
+                                        .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                                        .background(
+                                            if (idx == 5) accent else accent.copy(alpha = if (isDark) 0.62f else 0.72f),
+                                        ),
+                                )
+                            }
+                        }
+                        Column {
+                            Text(hoursText, fontSize = 19.sp, fontWeight = FontWeight.Bold, color = ink)
+                            Text("$totalPlays 次播放 · 查看报告 →", fontSize = 11.5.sp, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(26.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("自建歌单", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = ink)
+                Text("${playlists.size} 个", fontSize = 12.sp, color = muted)
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+
+            val totalSlots = playlists.size + 1
+            val cols = 4
+            val rows = (totalSlots + cols - 1) / cols
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                for (r in 0 until rows) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        for (c in 0 until cols) {
+                            val idx = r * cols + c
+                            if (idx < playlists.size) {
+                                val pl = playlists[idx]
+                                val plSongs = pl.songPaths.mapNotNull { songsByPath[it] }
+                                var menuOpen by remember(pl.id) { mutableStateOf(false) }
+                                BookbindingCard(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable { onOpenPlaylist(pl) },
+                                    cornerRadius = 14.dp,
+                                    contentPadding = PaddingValues(12.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                                    ) {
+                                        if (plSongs.isEmpty()) {
+                                            Icon(Icons.Rounded.QueueMusic, contentDescription = null, tint = muted, modifier = Modifier.align(Alignment.Center).size(32.dp))
+                                        } else {
+                                            val covers = plSongs.take(4)
+                                            Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                for (cr in 0..1) {
+                                                    Row(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                        for (cc in 0..1) {
+                                                            val s = covers.getOrNull(cr * 2 + cc) ?: covers.first()
+                                                            DesktopAlbumCover(filePath = s.filePath, modifier = Modifier.weight(1f).fillMaxHeight(), cornerRadius = 4.dp, iconSize = 16.dp)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(pl.name, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text("${plSongs.size} 首", fontSize = 11.5.sp, color = muted)
+                                        }
+                                        Box {
+                                            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(26.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                                Icon(Icons.Rounded.MoreVert, contentDescription = "操作", tint = muted, modifier = Modifier.size(15.dp))
+                                            }
+                                            DropdownMenu(
+                                                expanded = menuOpen,
+                                                onDismissRequest = { menuOpen = false },
+                                                modifier = Modifier.background(surface).border(0.7.dp, outline, RoundedCornerShape(10.dp)),
+                                            ) {
+                                                DropdownMenuItem(text = { Text("重命名", fontSize = 13.sp) }, onClick = { menuOpen = false; onRenamePlaylist(pl) })
+                                                DropdownMenuItem(text = { Text("删除歌单", fontSize = 13.sp, color = accent) }, onClick = { menuOpen = false; onDeletePlaylist(pl) })
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if (idx == playlists.size) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .aspectRatio(0.84f)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(surface.copy(alpha = 0.45f))
+                                        .border(1.dp, outline.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable(onClick = onCreatePlaylist),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Icon(Icons.Rounded.Add, contentDescription = null, tint = muted, modifier = Modifier.size(26.dp))
+                                        Text("新建自建歌单", fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = muted)
+                                    }
+                                }
+                            } else {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(84.dp))
         }
-        DesktopThinScrollbar(listState = listState, modifier = Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -3592,7 +3662,7 @@ private fun DesktopSettingsPage(
                                 Text("悬浮播放胶囊", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
                                 Text("开启后底部播放控制栏变为凌空圆角悬浮胶囊。", fontSize = 12.sp, color = muted)
                             }
-                            Switch(checked = config.floatingControlBar, onCheckedChange = onToggleFloatingBar, colors = SwitchDefaults.colors(checkedTrackColor = accent))
+                            BookbindingSlimSwitch(checked = config.floatingControlBar, onCheckedChange = onToggleFloatingBar)
                         }
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -3600,7 +3670,7 @@ private fun DesktopSettingsPage(
                                 Text("液态玻璃折射", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
                                 Text("为侧边栏滑块、分段标签与悬浮底栏启用光学高光折射。", fontSize = 12.sp, color = muted)
                             }
-                            Switch(checked = config.liquidGlassEnabled, onCheckedChange = onToggleLiquidGlass, colors = SwitchDefaults.colors(checkedTrackColor = accent))
+                            BookbindingSlimSwitch(checked = config.liquidGlassEnabled, onCheckedChange = onToggleLiquidGlass)
                         }
 
                         if (config.liquidGlassEnabled) {
@@ -3693,10 +3763,9 @@ private fun DesktopSettingsPage(
                                 Text("窗口自适应缩放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
                                 Text("拖拽缩放窗口或切换 2K/4K 全屏时自动等比缩放界面比例。", fontSize = 12.sp, color = muted)
                             }
-                            Switch(
+                            BookbindingSlimSwitch(
                                 checked = config.autoWindowScale,
                                 onCheckedChange = { onUpdateConfig(config.copy(autoWindowScale = it)) },
-                                colors = SwitchDefaults.colors(checkedTrackColor = accent),
                             )
                         }
 
@@ -3984,10 +4053,9 @@ private fun DesktopSettingsPage(
                                     Text("智能音量平衡", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
                                     Text("自动均衡不同专辑的响度差异，防止忽大忽小。", fontSize = 12.sp, color = muted)
                                 }
-                                Switch(
+                                BookbindingSlimSwitch(
                                     checked = config.volumeNormalizationEnabled,
                                     onCheckedChange = { onUpdateConfig(config.copy(volumeNormalizationEnabled = it)) },
-                                    colors = SwitchDefaults.colors(checkedTrackColor = accent),
                                 )
                             }
                             HorizontalDivider(thickness = 0.5.dp, color = outline)
@@ -4065,7 +4133,7 @@ private fun DesktopSettingsPage(
                                     Text("5 段防削波均衡器 (EQ)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
                                     Text("纯 Biquad IIR 滤波器 + 自动防爆音前级余量，关闭时 100% 直通。", fontSize = 12.sp, color = muted)
                                 }
-                                Switch(checked = config.eqEnabled, onCheckedChange = onToggleEqEnabled, colors = SwitchDefaults.colors(checkedTrackColor = accent))
+                                BookbindingSlimSwitch(checked = config.eqEnabled, onCheckedChange = onToggleEqEnabled)
                             }
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 EqPreset.entries.forEach { preset ->
@@ -4226,6 +4294,19 @@ private fun UnifiedImmersiveStage(
     showSpectrum: Boolean,
     lyricOffsetMs: Long,
     lyricFontScale: Float,
+    coverScale: Float = 1.0f,
+    moodStrength: Float = 0.80f,
+    lyricLines: Int = 5,
+    spectrumHeightMode: Int = 1,
+    matteCover: Boolean = true,
+    vinylRpm: Int = 33,
+    onUpdateCoverScale: (Float) -> Unit = {},
+    onUpdateMoodStrength: (Float) -> Unit = {},
+    onUpdateLyricLines: (Int) -> Unit = {},
+    onUpdateSpectrumHeight: (Int) -> Unit = {},
+    onToggleMatteCover: (Boolean) -> Unit = {},
+    onUpdateVinylRpm: (Int) -> Unit = {},
+    onResetImmersivePreset: () -> Unit = {},
     isDarkTheme: Boolean,
     accentColor: Color,
     isFullscreen: Boolean,
@@ -4269,8 +4350,8 @@ private fun UnifiedImmersiveStage(
         DesktopSceneStyle.VINYL_STUDY -> if (isDarkTheme) {
             Brush.verticalGradient(
                 listOf(
-                    lerp(Color(0xFF151C22), animatedMood, 0.62f),
-                    lerp(Color(0xFF0F151B), animatedMood, 0.42f),
+                    lerp(Color(0xFF151C22), animatedMood, 0.62f * moodStrength),
+                    lerp(Color(0xFF0F151B), animatedMood, 0.42f * moodStrength),
                     lerp(Color(0xFF0A0E13), animatedMood, 0.24f),
                 ),
             )
@@ -4279,22 +4360,22 @@ private fun UnifiedImmersiveStage(
         }
         DesktopSceneStyle.VINYL_LIGHTFIELD -> Brush.verticalGradient(
             listOf(
-                lerp(Color(0xFF181518), animatedMood, 0.66f),
-                lerp(Color(0xFF110F14), animatedMood, 0.46f),
+                lerp(Color(0xFF181518), animatedMood, 0.66f * moodStrength),
+                lerp(Color(0xFF110F14), animatedMood, 0.46f * moodStrength),
                 lerp(Color(0xFF0A0B0F), animatedMood, 0.26f),
             ),
         )
         DesktopSceneStyle.SPATIAL_GALLERY -> Brush.verticalGradient(
             listOf(
-                lerp(Color(0xFF16161C), animatedMood, 0.62f),
-                lerp(Color(0xFF0F1016), animatedMood, 0.42f),
+                lerp(Color(0xFF16161C), animatedMood, 0.62f * moodStrength),
+                lerp(Color(0xFF0F1016), animatedMood, 0.42f * moodStrength),
                 lerp(Color(0xFF0A0B10), animatedMood, 0.24f),
             ),
         )
         DesktopSceneStyle.POSTER_WALL -> Brush.verticalGradient(
             listOf(
-                lerp(Color(0xFF141820), animatedMood, 0.58f),
-                lerp(Color(0xFF0E1117), animatedMood, 0.40f),
+                lerp(Color(0xFF141820), animatedMood, 0.58f * moodStrength),
+                lerp(Color(0xFF0E1117), animatedMood, 0.40f * moodStrength),
                 lerp(Color(0xFF090B10), animatedMood, 0.24f),
             ),
         )
@@ -4307,9 +4388,9 @@ private fun UnifiedImmersiveStage(
     var lastPointerMoveMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var chromeVisible by remember { mutableStateOf(true) }
 
-    LaunchedEffect(lastPointerMoveMs, menuExpanded) {
+    LaunchedEffect(lastPointerMoveMs, menuExpanded, customizerOpen) {
         chromeVisible = true
-        if (!menuExpanded) {
+        if (!menuExpanded && !customizerOpen) {
             delay(3200)
             chromeVisible = false
         }
@@ -4325,7 +4406,7 @@ private fun UnifiedImmersiveStage(
                 // Left-upper highlight orb glowing behind album sleeve & vinyl
                 drawRect(
                     brush = Brush.radialGradient(
-                        0.00f to animatedGlow.copy(alpha = 0.36f),
+                        0.00f to animatedGlow.copy(alpha = 0.38f * moodStrength),
                         0.45f to animatedMood.copy(alpha = 0.18f),
                         0.85f to Color.Transparent,
                         center = Offset(size.width * 0.19f, size.height * 0.42f),
@@ -4335,7 +4416,7 @@ private fun UnifiedImmersiveStage(
                 // Right-center primary atmospheric wash behind lyrics & spectrum
                 drawRect(
                     brush = Brush.radialGradient(
-                        0.00f to animatedMood.copy(alpha = 0.32f),
+                        0.00f to animatedMood.copy(alpha = 0.34f * moodStrength),
                         0.50f to animatedGlow.copy(alpha = 0.11f),
                         0.88f to Color.Transparent,
                         center = Offset(size.width * 0.76f, size.height * 0.34f),
@@ -4345,7 +4426,7 @@ private fun UnifiedImmersiveStage(
                 // Soft warm floor horizon accent behind bottom spectrum
                 drawRect(
                     brush = Brush.radialGradient(
-                        0.00f to animatedGlow.copy(alpha = 0.18f),
+                        0.00f to animatedGlow.copy(alpha = 0.20f * moodStrength),
                         0.62f to Color.Transparent,
                         center = Offset(size.width * 0.68f, size.height * 0.86f),
                         radius = size.maxDimension * 0.42f,
@@ -4370,7 +4451,7 @@ private fun UnifiedImmersiveStage(
         // Minimal Auto-Hiding Top Bar (Left '<' Back, Center Calm Scene Pill, Right F11)
         Box(modifier = Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 24.dp)) {
             androidx.compose.animation.AnimatedVisibility(
-                visible = chromeVisible || menuExpanded,
+                visible = chromeVisible || menuExpanded || customizerOpen,
                 enter = fadeIn(tween(180)),
                 exit = fadeOut(tween(420)),
                 modifier = Modifier.fillMaxSize(),
@@ -4443,6 +4524,113 @@ private fun UnifiedImmersiveStage(
                                 Text(if (isTranslatingLyrics) "译..." else "译", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = if (isTranslatingLyrics) activeAccent else primaryInk)
                             }
                         }
+                    // Top-Right Studio Customizer ('沉浸自定义') Popover
+                    Box {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (customizerOpen) activeAccent.copy(alpha = 0.22f) else if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.05f))
+                                .border(0.6.dp, if (customizerOpen) activeAccent.copy(alpha = 0.65f) else primaryInk.copy(alpha = 0.16f), RoundedCornerShape(14.dp))
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { customizerOpen = !customizerOpen }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(Icons.Rounded.Tune, contentDescription = "沉浸自定义", tint = if (customizerOpen) activeAccent else primaryInk, modifier = Modifier.size(14.dp))
+                            Text("自定义", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = if (customizerOpen) activeAccent else primaryInk)
+                        }
+                        DropdownMenu(
+                            expanded = customizerOpen,
+                            onDismissRequest = { customizerOpen = false },
+                            modifier = Modifier
+                                .width(292.dp)
+                                .background(if (isDarkScene) Color(0xFF232730) else MaterialTheme.colorScheme.surface)
+                                .border(0.8.dp, if (isDarkScene) Color.White.copy(alpha = 0.14f) else MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                        ) {
+                            val popInk = if (isDarkScene) Color(0xFFF3EFE6) else MaterialTheme.colorScheme.onBackground
+                            val popMuted = if (isDarkScene) Color(0xFFA6ABB6) else MaterialTheme.colorScheme.onSurfaceVariant
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("沉浸自定义", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = popInk)
+                                Text(
+                                    "重置",
+                                    fontSize = 11.5.sp,
+                                    color = activeAccent,
+                                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable { onResetImmersivePreset() },
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Text("封面尺寸  ${(coverScale * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
+                            DesktopSleekSlider(
+                                value = ((coverScale - 0.80f) / 0.45f).coerceIn(0f, 1f),
+                                onValueChange = { onUpdateCoverScale(0.80f + it * 0.45f) },
+                                activeColor = activeAccent,
+                                inactiveColor = popMuted.copy(alpha = 0.25f),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Text("歌词字号  ${(lyricFontScale * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
+                            DesktopSleekSlider(
+                                value = ((lyricFontScale - 0.75f) / 0.70f).coerceIn(0f, 1f),
+                                onValueChange = { target -> onAdjustLyricScale((0.75f + target * 0.70f) - lyricFontScale) },
+                                activeColor = activeAccent,
+                                inactiveColor = popMuted.copy(alpha = 0.25f),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Text("动态氛围强度  ${(moodStrength * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
+                            DesktopSleekSlider(
+                                value = moodStrength.coerceIn(0f, 1f),
+                                onValueChange = onUpdateMoodStrength,
+                                activeColor = activeAccent,
+                                inactiveColor = popMuted.copy(alpha = 0.25f),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("频谱高度", fontSize = 12.sp, color = popInk)
+                                BookbindingSegmentedBar(
+                                    items = listOf(0 to "紧凑", 1 to "标准", 2 to "宽阔"),
+                                    selected = spectrumHeightMode,
+                                    onSelect = onUpdateSpectrumHeight,
+                                    compact = true,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("歌词行数", fontSize = 12.sp, color = popInk)
+                                BookbindingSegmentedBar(
+                                    items = listOf(3 to "3行", 5 to "5行", 7 to "7行"),
+                                    selected = lyricLines,
+                                    onSelect = onUpdateLyricLines,
+                                    compact = true,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("黑胶转速", fontSize = 12.sp, color = popInk)
+                                BookbindingSegmentedBar(
+                                    items = listOf(33 to "33", 45 to "45", 78 to "78"),
+                                    selected = vinylRpm,
+                                    onSelect = onUpdateVinylRpm,
+                                    compact = true,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("封面亚光磨砂质感", fontSize = 12.sp, color = popInk)
+                                BookbindingSlimSwitch(checked = matteCover, onCheckedChange = onToggleMatteCover)
+                            }
+                        }
+                    }
                     IconButton(
                         onClick = onToggleFullscreen,
                         modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
@@ -4496,20 +4684,20 @@ private fun UnifiedImmersiveStage(
                 ) {
                     // LEFT 1/3 (~36%): Sculptural Visual Showcase + Real Mirror Reflection + Centered Song Info
                     BoxWithConstraints(
-                        modifier = Modifier.weight(0.37f).fillMaxHeight(),
+                        modifier = Modifier.weight(0.44f).fillMaxHeight(),
                         contentAlignment = Alignment.Center,
                     ) {
                         val colW = maxWidth
                         val colH = maxHeight
-                        val sleeveSize = min(colW * 0.72f, colH * 0.46f).coerceIn(190.dp, 380.dp)
-                        val discSize = sleeveSize * 0.90f
+                        val sleeveSize = (min(colW * 0.78f, colH * 0.64f) * coverScale).coerceIn(220.dp, 460.dp)
+                        val discSize = sleeveSize * 0.92f
                         val titleSp = (colW.value * 0.056f).coerceIn(18f, 28f)
                         val artistSp = (colW.value * 0.034f).coerceIn(13f, 18f)
 
                         Column(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxSize().padding(bottom = 14.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
+                            verticalArrangement = Arrangement.Bottom,
                         ) {
                             when (targetScene) {
                                 DesktopSceneStyle.VINYL_STUDY -> {
@@ -4598,6 +4786,20 @@ private fun UnifiedImmersiveStage(
                                                 .background(if (isDarkScene) Color(0xFF1F1D1B) else Color(0xFFF3EFE6)),
                                         ) {
                                             DesktopAlbumCover(filePath = song.filePath, modifier = Modifier.fillMaxSize(), cornerRadius = 0.dp, iconSize = 48.dp)
+                                            if (matteCover) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(
+                                                            Brush.linearGradient(
+                                                                0.00f to Color(0xFFFFFDF8).copy(alpha = 0.14f),
+                                                                0.32f to Color.White.copy(alpha = 0.04f),
+                                                                0.60f to Color.Transparent,
+                                                                1.00f to Color.Black.copy(alpha = 0.14f),
+                                                            ),
+                                                        ),
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -4609,13 +4811,13 @@ private fun UnifiedImmersiveStage(
                                         onTogglePlayPause = onTogglePlayPause,
                                         onSkipPrevious = onSkipPrevious,
                                         onSkipNext = onSkipNext,
-                                        modifier = Modifier.fillMaxWidth().height((colH * 0.56f).coerceIn(240.dp, 460.dp)),
+                                        modifier = Modifier.fillMaxWidth().height(((colH * 0.66f) * coverScale).coerceIn(260.dp, 500.dp)),
                                     )
                                 }
 
                                 else -> {
                                     // VINYL_LIGHTFIELD
-                                    val giantDisc = min(colW * 0.84f, colH * 0.54f).coerceIn(210.dp, 400.dp)
+                                    val giantDisc = (min(colW * 0.88f, colH * 0.66f) * coverScale).coerceIn(240.dp, 460.dp)
                                     Box(contentAlignment = Alignment.Center) {
                                         DesktopSpinningVinylDisc(
                                             filePath = song.filePath,
@@ -4658,7 +4860,7 @@ private fun UnifiedImmersiveStage(
 
                     // RIGHT 2/3 (~63%): Upper Multi-Line Scrolling Bilingual Karaoke Lyrics + Lower Fluid Spectrum & Minimal Controls
                     Column(
-                        modifier = Modifier.weight(0.63f).fillMaxHeight().padding(top = 8.dp, bottom = 14.dp),
+                        modifier = Modifier.weight(0.56f).fillMaxHeight().padding(top = 8.dp, bottom = 14.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         // Upper ~74%: 5-7 Line Smoothly Faded Bilingual Scrolling Karaoke Lyrics
@@ -4673,6 +4875,7 @@ private fun UnifiedImmersiveStage(
                             secondaryColor = secondaryInk,
                             mutedColor = secondaryInk,
                             lyricFontScale = lyricFontScale,
+                            visibleLines = lyricLines,
                             onSeekTo = onSeekTo,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
@@ -4692,6 +4895,7 @@ private fun UnifiedImmersiveStage(
                                 accentColor = activeAccent,
                                 timestampColor = secondaryInk.copy(alpha = 0.85f),
                                 onSeekTo = onSeekTo,
+                                stageHeightDp = when (spectrumHeightMode) { 0 -> 68.dp; 2 -> 118.dp; else -> 92.dp },
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }

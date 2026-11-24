@@ -25,6 +25,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -1658,6 +1660,7 @@ fun DesktopLiveSpectrumBar(
     accentColor: Color,
     timestampColor: Color,
     onSeekTo: (Long) -> Unit,
+    stageHeightDp: Dp = 92.dp,
     modifier: Modifier = Modifier,
 ) {
     val barCount = DesktopSpectrumBus.BAND_COUNT
@@ -1742,7 +1745,7 @@ fun DesktopLiveSpectrumBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(98.dp)
+                .height(stageHeightDp + 6.dp)
                 .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
                 .pointerInput(durationMs) {
                     detectTapGestures { offset -> onSeekTo(((offset.x / widthPx).coerceIn(0f, 1f) * durationMs).toLong()) }
@@ -1757,7 +1760,7 @@ fun DesktopLiveSpectrumBar(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(modifier = Modifier.fillMaxWidth().height(92.dp)) {
+            Canvas(modifier = Modifier.fillMaxWidth().height(stageHeightDp)) {
                 val _tick = frameTick
                 val totalW = size.width
                 val totalH = size.height
@@ -2735,6 +2738,7 @@ fun DesktopMultiLineScrollingLyrics(
     secondaryColor: Color,
     mutedColor: Color,
     lyricFontScale: Float = 1f,
+    visibleLines: Int = 5,
     onSeekTo: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -2892,5 +2896,185 @@ fun DesktopMultiLineScrollingLyrics(
                 }
             }
         }
+    }
+}
+
+
+// =================================================================================================
+// UNIFIED PRECISION BOOKBINDING HARDWARE COMPONENT SYSTEM (v4.3.0)
+// Shared across Library, Albums, Playlists, Settings & Studio Customizer (Light Washi + Night Slate)
+// =================================================================================================
+
+@Composable
+fun BookbindingCard(
+    modifier: Modifier = Modifier,
+    cornerRadius: Dp = 14.dp,
+    elevation: Dp = 3.dp,
+    contentPadding: PaddingValues = PaddingValues(18.dp),
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(cornerRadius)
+    val isDark = MaterialTheme.colorScheme.background.red < 0.35f
+    val borderCol = if (isDark) Color(0xFFFFFAF0).copy(alpha = 0.11f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.85f)
+    Column(
+        modifier = modifier
+            .shadow(elevation = if (isDark) elevation * 0.6f else elevation, shape = shape, ambientColor = Color.Black.copy(alpha = if (isDark) 0.35f else 0.08f))
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(0.8.dp, borderCol, shape)
+            .padding(contentPadding),
+        content = content,
+    )
+}
+
+@Composable
+fun <T> BookbindingSegmentedBar(
+    items: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    val isDark = MaterialTheme.colorScheme.background.red < 0.35f
+    val trackShape = RoundedCornerShape(10.dp)
+    val pillShape = RoundedCornerShape(8.dp)
+    val trackBg = if (isDark) Color(0xFF15181E) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+    val trackBorder = if (isDark) Color.White.copy(alpha = 0.09f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.75f)
+    val activeBg = if (isDark) Color(0xFF2E333E) else MaterialTheme.colorScheme.surface
+    val activeBorder = if (isDark) Color(0xFFE5C487).copy(alpha = 0.45f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+
+    Row(
+        modifier = modifier
+            .clip(trackShape)
+            .background(trackBg)
+            .border(0.75.dp, trackBorder, trackShape)
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        items.forEach { (value, label) ->
+            val isActive = value == selected
+            Box(
+                modifier = Modifier
+                    .then(
+                        if (isActive) {
+                            Modifier
+                                .shadow(if (isDark) 1.dp else 2.dp, pillShape, ambientColor = Color.Black.copy(alpha = 0.12f))
+                                .clip(pillShape)
+                                .background(activeBg)
+                                .border(0.8.dp, activeBorder, pillShape)
+                        } else {
+                            Modifier.clip(pillShape)
+                        },
+                    )
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable { onSelect(value) }
+                    .padding(horizontal = if (compact) 10.dp else 13.dp, vertical = if (compact) 5.dp else 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    fontSize = if (compact) 11.5.sp else 12.sp,
+                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isActive) {
+                        if (isDark) Color(0xFFF3EFE6) else MaterialTheme.colorScheme.onBackground
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BookbindingPillButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    primary: Boolean = false,
+    leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+) {
+    val isDark = MaterialTheme.colorScheme.background.red < 0.35f
+    val shape = RoundedCornerShape(10.dp)
+    val accent = MaterialTheme.colorScheme.primary
+    val bgBrush = if (primary) {
+        Brush.verticalGradient(
+            0.0f to androidx.compose.ui.graphics.lerp(accent, Color.White, 0.10f),
+            1.0f to accent,
+        )
+    } else {
+        Brush.verticalGradient(
+            0.0f to MaterialTheme.colorScheme.surface,
+            1.0f to if (isDark) Color(0xFF20242C) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        )
+    }
+    val borderCol = if (primary) {
+        Color.White.copy(alpha = 0.18f)
+    } else if (isDark) {
+        Color.White.copy(alpha = 0.14f)
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.90f)
+    }
+    val textCol = if (primary) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground
+
+    Row(
+        modifier = modifier
+            .height(34.dp)
+            .shadow(if (primary) 4.dp else 1.dp, shape, ambientColor = if (primary) accent.copy(alpha = 0.32f) else Color.Black.copy(alpha = 0.08f))
+            .clip(shape)
+            .background(bgBrush)
+            .border(0.8.dp, borderCol, shape)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (leadingIcon != null) {
+            Icon(leadingIcon, contentDescription = null, tint = textCol, modifier = Modifier.size(15.dp))
+        }
+        Text(text, fontSize = 12.sp, fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium, color = textCol, maxLines = 1)
+    }
+}
+
+@Composable
+fun BookbindingSlimSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isDark = MaterialTheme.colorScheme.background.red < 0.35f
+    val accent = MaterialTheme.colorScheme.primary
+    val trackCol by animateColorAsState(
+        targetValue = if (checked) accent else if (isDark) Color(0xFF343946) else MaterialTheme.colorScheme.outline.copy(alpha = 0.65f),
+        animationSpec = tween(180),
+        label = "slimSwTrack",
+    )
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) 18.dp else 2.dp,
+        animationSpec = tween(180),
+        label = "slimSwThumb",
+    )
+    Box(
+        modifier = modifier
+            .width(40.dp)
+            .height(22.dp)
+            .clip(CircleShape)
+            .background(trackCol)
+            .border(0.6.dp, Color.White.copy(alpha = if (checked) 0.18f else 0.10f), CircleShape)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable { onCheckedChange(!checked) },
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            modifier = Modifier
+                .offset(x = thumbOffset)
+                .size(18.dp)
+                .shadow(2.dp, CircleShape)
+                .clip(CircleShape)
+                .background(Color(0xFFFAF7F2)),
+        )
     }
 }
