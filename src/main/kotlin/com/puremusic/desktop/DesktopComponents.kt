@@ -630,7 +630,7 @@ fun DesktopSpatialRecordGallery(
             },
         contentAlignment = Alignment.Center,
     ) {
-        val frontSize = min(maxWidth * 0.36f, maxHeight * 0.68f).coerceIn(220.dp, 520.dp)
+        val frontSize = min(maxWidth * 0.56f, maxHeight * 0.64f).coerceIn(210.dp, 460.dp)
         val corridorW = frontSize * 1.44f
         val corridorH = frontSize * 1.32f
         val baseY = 20.dp
@@ -1608,7 +1608,7 @@ fun DesktopLiveSpectrumBar(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(modifier = Modifier.fillMaxWidth().height(58.dp)) {
+            Canvas(modifier = Modifier.fillMaxWidth().height(42.dp)) {
                 val _tick = frameTick
                 val totalW = size.width
                 val totalH = size.height
@@ -1623,44 +1623,54 @@ fun DesktopLiveSpectrumBar(
                     return arr[i0] + (arr[i1] - arr[i0]) * smoothT
                 }
 
-                // Dynamic width-aware bar density: keeps micro-capsules fine and evenly spaced on any aspect ratio
+                // Desktop 16:9 Architectural Horizon Spectrum: ultra-fine 1.2–2.0px hairline micro-bars
                 val densityPx = density
-                val displayBars = (totalW / (8.5f * densityPx)).toInt().coerceIn(56, 148)
+                val displayBars = (totalW / (5.4f * densityPx)).toInt().coerceIn(96, 210)
 
                 when (spectrumStyle) {
                     DesktopSpectrumStyle.SILK_RIBBON -> {
                         val step = totalW / displayBars
-                        val barW = (step * 0.44f).coerceIn(2.0f * densityPx, 3.6f * densityPx)
-                        val baseY = totalH - 3f
-                        val crestPath = Path()
-                        var prevX = 0f; var prevY = baseY
+                        val barW = (step * 0.34f).coerceIn(1.2f * densityPx, 2.0f * densityPx)
+                        val baseY = totalH - 4f
                         for (i in 0 until displayBars) {
                             val u = i.toFloat() / (displayBars - 1).coerceAtLeast(1)
-                            val level = sampleSmooth(animatedLevels, u)
+                            val edgeTaper = sin(u * PI).toFloat().coerceIn(0.22f, 1f)
+                            val level = sampleSmooth(animatedLevels, u) * edgeTaper
                             val cx = i * step + step * 0.5f
                             val isPlayed = cx <= playheadX
-                            val barH = ((totalH - 10f) * level).coerceAtLeast(3.5f)
+                            val barH = if (isPlayed) {
+                                ((totalH - 10f) * level * 0.92f).coerceAtLeast(2.6f)
+                            } else {
+                                ((totalH - 12f) * level * 0.36f).coerceAtLeast(2.0f)
+                            }
                             val topY = baseY - barH
                             val col = if (isPlayed) playedColor else unplayedColor
                             drawRoundRect(
-                                brush = Brush.verticalGradient(0.0f to col.copy(alpha = if (isPlayed) 0.92f else 0.62f), 0.75f to col.copy(alpha = if (isPlayed) 0.48f else 0.24f), 1.0f to Color.Transparent, startY = topY, endY = baseY),
+                                brush = Brush.verticalGradient(
+                                    0.0f to col.copy(alpha = if (isPlayed) 0.92f else 0.42f),
+                                    0.78f to col.copy(alpha = if (isPlayed) 0.44f else 0.16f),
+                                    1.0f to col.copy(alpha = if (isPlayed) 0.15f else 0.06f),
+                                    startY = topY,
+                                    endY = baseY,
+                                ),
                                 topLeft = Offset(cx - barW * 0.5f, topY),
                                 size = Size(barW, barH),
                                 cornerRadius = CornerRadius(barW * 0.5f, barW * 0.5f),
                             )
-                            val crestY = (topY - 2f).coerceAtLeast(2f)
-                            if (i == 0) crestPath.moveTo(cx, crestY)
-                            else crestPath.quadraticTo(prevX, prevY, (prevX + cx) * 0.5f, (prevY + crestY) * 0.5f)
-                            prevX = cx; prevY = crestY
                         }
-                        crestPath.lineTo(prevX, prevY)
-                        clipRect(0f, 0f, playheadX, totalH) {
-                            drawPath(crestPath, color = playedColor.copy(alpha = 0.20f), style = Stroke(5f, cap = StrokeCap.Round))
-                            drawPath(crestPath, color = playedColor.copy(alpha = 0.90f), style = Stroke(1.8f, cap = StrokeCap.Round))
-                        }
-                        clipRect(playheadX, 0f, totalW, totalH) {
-                            drawPath(crestPath, color = unplayedColor.copy(alpha = 0.68f), style = Stroke(1.3f, cap = StrokeCap.Round))
-                        }
+                        // Razor-thin architectural horizon baseline + played progress filament
+                        drawLine(
+                            color = unplayedColor.copy(alpha = 0.28f),
+                            start = Offset(0f, baseY + 1.5f),
+                            end = Offset(totalW, baseY + 1.5f),
+                            strokeWidth = 1.2f,
+                        )
+                        drawLine(
+                            color = playedColor.copy(alpha = 0.90f),
+                            start = Offset(0f, baseY + 1.5f),
+                            end = Offset(playheadX, baseY + 1.5f),
+                            strokeWidth = 1.6f,
+                        )
                     }
 
                     DesktopSpectrumStyle.HARMONIC_STRINGS -> {

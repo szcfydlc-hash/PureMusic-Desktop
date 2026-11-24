@@ -307,6 +307,7 @@ object DesktopConfigStore {
         var darkMode = false
         var accent = DesktopAccentColor.CINNABAR
         var density = DesktopLayoutDensity.STANDARD
+        var albumViewMode = DesktopAlbumViewMode.GRID_6
         var fontScale = 1.0f
         var appFontStyle = DesktopFontStyle.YAHEI
         var lyricFontStyle = DesktopLyricFontStyle.SERIF
@@ -441,6 +442,7 @@ object DesktopConfigStore {
             darkMode = darkMode,
             accentColor = accent,
             layoutDensity = density,
+            albumViewMode = albumViewMode,
             fontScale = fontScale,
             appFontStyle = appFontStyle,
             lyricFontStyle = lyricFontStyle,

@@ -694,7 +694,7 @@ fun main() = application {
                                                 color = MaterialTheme.colorScheme.onBackground,
                                             )
                                             Text(
-                                                text = "PureMusic v4.0",
+                                                text = "PureMusic v4.1",
                                                 fontSize = 10.5.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
                                             )
@@ -1020,6 +1020,8 @@ fun main() = application {
                                     DesktopTab.ALBUMS -> DesktopAlbumsPage(
                                         albums = albums,
                                         density = config.layoutDensity,
+                                        viewMode = config.albumViewMode,
+                                        onSelectViewMode = { vm -> updateConfig { it.copy(albumViewMode = vm) } },
                                         onSelectAlbum = { activeDetail = DesktopDetailView.AlbumView(it) },
                                     )
 
@@ -2181,12 +2183,12 @@ private fun BookTrackRow(
             .hoverable(hoverSrc)
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = (density.rowPaddingDp - 1).coerceAtLeast(6).dp),
+            .padding(horizontal = 12.dp, vertical = density.rowPaddingDp.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         DesktopAlbumCover(
             filePath = song.filePath,
-            modifier = Modifier.size(40.dp).shadow(2.dp, RoundedCornerShape(6.dp)),
+            modifier = Modifier.size(density.artSizeDp.dp).shadow(2.dp, RoundedCornerShape(6.dp)),
             cornerRadius = 6.dp,
             iconSize = 16.dp,
         )
@@ -2266,106 +2268,278 @@ private fun BookTrackRow(
 private fun DesktopAlbumsPage(
     albums: List<DesktopAlbum>,
     density: DesktopLayoutDensity,
+    viewMode: DesktopAlbumViewMode = DesktopAlbumViewMode.GRID_6,
+    onSelectViewMode: (DesktopAlbumViewMode) -> Unit = {},
     onSelectAlbum: (DesktopAlbum) -> Unit,
 ) {
+    var albumQuery by remember { mutableStateOf("") }
+    val filteredAlbums = remember(albums, albumQuery) {
+        val q = albumQuery.trim()
+        if (q.isEmpty()) albums
+        else albums.filter { it.name.contains(q, ignoreCase = true) || it.artist.contains(q, ignoreCase = true) }
+    }
+    val outline = MaterialTheme.colorScheme.outline
+    val surface = MaterialTheme.colorScheme.surface
+    val ink = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                .widthIn(max = 1180.dp)
+                .widthIn(max = 1220.dp)
                 .fillMaxWidth()
-                .padding(horizontal = 36.dp, vertical = 14.dp),
+                .padding(horizontal = 32.dp, vertical = 12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("专辑", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                Text("${albums.size} 张精选专辑", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 5.dp))
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("专辑", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = ink)
+                    Text("${filteredAlbums.size} 张专辑", fontSize = 12.5.sp, color = muted, modifier = Modifier.padding(bottom = 4.dp))
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // Sleek album search pill
+                    Row(
+                        modifier = Modifier
+                            .width(190.dp)
+                            .height(32.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(surface)
+                            .border(0.6.dp, outline, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Rounded.Search, contentDescription = null, tint = muted, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (albumQuery.isEmpty()) Text("筛选专辑或歌手", fontSize = 11.5.sp, color = muted.copy(alpha = 0.65f))
+                            BasicTextField(
+                                value = albumQuery,
+                                onValueChange = { albumQuery = it },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall.copy(color = ink),
+                                cursorBrush = SolidColor(accent),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (albumQuery.isNotEmpty()) {
+                            Icon(Icons.Rounded.Close, contentDescription = "清除", tint = muted, modifier = Modifier.size(13.dp).pointerHoverIcon(PointerIcon.Hand).clickable { albumQuery = "" })
+                        }
+                    }
+
+                    // 3-Mode Album View Switcher (4列精装 / 6列高效 / 书目列表)
+                    Row(
+                        modifier = Modifier
+                            .height(32.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
+                            .border(0.6.dp, outline, RoundedCornerShape(16.dp))
+                            .padding(2.5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        DesktopAlbumViewMode.entries.forEach { mode ->
+                            val sel = mode == viewMode
+                            val pillShape = RoundedCornerShape(13.5.dp)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .then(
+                                        if (sel) {
+                                            Modifier.clip(pillShape).background(surface).border(0.5.dp, outline.copy(alpha = 0.75f), pillShape)
+                                        } else {
+                                            Modifier.clip(pillShape)
+                                        },
+                                    )
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable { onSelectViewMode(mode) }
+                                    .padding(horizontal = 11.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = mode.label,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Medium,
+                                    color = if (sel) accent else muted,
+                                )
+                            }
+                        }
+                    }
+                }
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(thickness = 0.6.dp, color = MaterialTheme.colorScheme.outline)
-            Spacer(modifier = Modifier.height(18.dp))
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(thickness = 0.6.dp, color = outline)
+            Spacer(modifier = Modifier.height(density.gridSpacingDp.dp))
 
             val listState = rememberLazyListState()
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val cols = ((maxWidth.value / 228f).toInt()).coerceIn(3, 5)
-                val rows = remember(albums, cols) { albums.chunked(cols) }
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().padding(end = 10.dp),
-                    contentPadding = PaddingValues(bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(24.dp),
-                ) {
-                    items(rows, key = { row -> row.joinToString("|") { it.name } }) { rowAlbums ->
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(22.dp)) {
-                            rowAlbums.forEach { album ->
+                when (viewMode) {
+                    DesktopAlbumViewMode.LIST -> {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(end = 10.dp),
+                            contentPadding = PaddingValues(bottom = 96.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            items(filteredAlbums, key = { "${it.name}_${it.artist}" }) { album ->
                                 val hoverSrc = remember { MutableInteractionSource() }
                                 val hovered by hoverSrc.collectIsHoveredAsState()
-                                val peekOffset by animateDpAsState(if (hovered) 16.dp else 0.dp, spring(dampingRatio = 0.72f, stiffness = 340f), label = "albPeek")
-                                val matShape = RoundedCornerShape(12.dp)
-                                Column(
+                                val totalMs = remember(album) { album.songs.sumOf { it.durationMs.coerceAtLeast(0L) } }
+                                val firstSong = album.songs.firstOrNull()
+                                val rowShape = RoundedCornerShape(10.dp)
+                                Row(
                                     modifier = Modifier
-                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .then(
+                                            if (hovered) Modifier.shadow(2.dp, rowShape, ambientColor = Color.Black.copy(alpha = 0.07f)).clip(rowShape).background(surface).border(0.6.dp, outline, rowShape)
+                                            else Modifier.clip(rowShape),
+                                        )
                                         .hoverable(hoverSrc)
                                         .pointerHoverIcon(PointerIcon.Hand)
-                                        .clickable { onSelectAlbum(album) },
+                                        .clickable { onSelectAlbum(album) }
+                                        .padding(horizontal = 12.dp, vertical = density.rowPaddingDp.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.CenterStart) {
-                                        // Hover-gliding 180g black vinyl disc peeking out on the right
-                                        if (peekOffset > 1.dp) {
-                                            Canvas(
-                                                modifier = Modifier
-                                                    .align(Alignment.CenterEnd)
-                                                    .offset(x = peekOffset)
-                                                    .fillMaxHeight(0.84f)
-                                                    .aspectRatio(1f),
-                                            ) {
-                                                val r = size.minDimension / 2f
-                                                val c = Offset(r, r)
-                                                drawCircle(
-                                                    brush = Brush.radialGradient(
-                                                        0.0f to Color(0xFF0A0A0C),
-                                                        0.70f to Color(0xFF17171B),
-                                                        0.90f to Color(0xFF25252A),
-                                                        1.0f to Color(0xFF0A0A0C),
-                                                        center = c,
-                                                        radius = r,
-                                                    ),
-                                                    radius = r,
-                                                    center = c,
-                                                )
-                                                for (g in 1..6) {
-                                                    drawCircle(Color.White.copy(alpha = 0.07f), radius = r * (0.55f + g * 0.06f), center = c, style = Stroke(0.7f))
-                                                }
-                                            }
-                                        }
-                                        // Warm ivory mat frame around crisp square cover
-                                        Box(
+                                    DesktopAlbumCover(filePath = firstSong?.filePath, modifier = Modifier.size(density.artSizeDp.dp).shadow(2.dp, RoundedCornerShape(5.dp)), cornerRadius = 5.dp, iconSize = 18.dp)
+                                    Spacer(modifier = Modifier.width(14.dp))
+                                    Text(album.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1.3f).padding(end = 12.dp))
+                                    Text(album.artist, style = MaterialTheme.typography.bodySmall, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(0.9f).padding(end = 12.dp))
+                                    Text("${album.songs.size} 首", fontSize = 12.sp, color = muted, modifier = Modifier.width(56.dp))
+                                    Text(firstSong?.formatLabel ?: "AUDIO", fontSize = 10.5.sp, color = if (firstSong?.isHiRes == true) accent else muted, modifier = Modifier.width(58.dp))
+                                    Text(formatDuration(totalMs), fontSize = 12.sp, color = muted, textAlign = TextAlign.End, modifier = Modifier.width(58.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    DesktopAlbumViewMode.GRID_6 -> {
+                        val cols = ((maxWidth.value / 158f).toInt()).coerceIn(5, 7)
+                        val rows = remember(filteredAlbums, cols) { filteredAlbums.chunked(cols) }
+                        val gapDp = density.gridSpacingDp.dp
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(end = 10.dp),
+                            contentPadding = PaddingValues(bottom = 96.dp),
+                            verticalArrangement = Arrangement.spacedBy(gapDp + 4.dp),
+                        ) {
+                            items(rows, key = { row -> row.joinToString("|") { "${it.name}_${it.artist}" } }) { rowAlbums ->
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gapDp)) {
+                                    rowAlbums.forEach { album ->
+                                        val hoverSrc = remember { MutableInteractionSource() }
+                                        val hovered by hoverSrc.collectIsHoveredAsState()
+                                        Column(
                                             modifier = Modifier
-                                                .fillMaxSize()
-                                                .shadow(if (hovered) 12.dp else 4.dp, matShape, ambientColor = Color.Black.copy(alpha = 0.14f))
-                                                .clip(matShape)
-                                                .background(MaterialTheme.colorScheme.surface)
-                                                .border(0.6.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.8f), matShape)
-                                                .padding(8.dp),
+                                                .weight(1f)
+                                                .hoverable(hoverSrc)
+                                                .pointerHoverIcon(PointerIcon.Hand)
+                                                .clickable { onSelectAlbum(album) },
                                         ) {
                                             DesktopAlbumCover(
                                                 filePath = album.songs.firstOrNull()?.filePath,
-                                                modifier = Modifier.fillMaxSize(),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .aspectRatio(1f)
+                                                    .shadow(if (hovered) 10.dp else 3.dp, RoundedCornerShape(6.dp), ambientColor = Color.Black.copy(alpha = 0.14f))
+                                                    .border(0.5.dp, outline.copy(alpha = if (hovered) 0.9f else 0.55f), RoundedCornerShape(6.dp)),
                                                 cornerRadius = 6.dp,
-                                                iconSize = 36.dp,
+                                                iconSize = 28.dp,
                                             )
+                                            Spacer(modifier = Modifier.height(7.dp))
+                                            Text(album.name, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = if (hovered) accent else ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Spacer(modifier = Modifier.height(1.dp))
+                                            Text("${album.artist} · ${album.songs.size}首", fontSize = 11.sp, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         }
                                     }
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Text(album.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text("${album.artist} · ${album.songs.size} 首", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    repeat(cols - rowAlbums.size) { Spacer(modifier = Modifier.weight(1f)) }
                                 }
                             }
-                            repeat(cols - rowAlbums.size) { Spacer(modifier = Modifier.weight(1f)) }
+                        }
+                    }
+
+                    DesktopAlbumViewMode.GRID_4 -> {
+                        val cols = ((maxWidth.value / 230f).toInt()).coerceIn(3, 5)
+                        val rows = remember(filteredAlbums, cols) { filteredAlbums.chunked(cols) }
+                        val gapDp = (density.gridSpacingDp + 6).dp
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(end = 10.dp),
+                            contentPadding = PaddingValues(bottom = 96.dp),
+                            verticalArrangement = Arrangement.spacedBy(gapDp),
+                        ) {
+                            items(rows, key = { row -> row.joinToString("|") { "${it.name}_${it.artist}" } }) { rowAlbums ->
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gapDp)) {
+                                    rowAlbums.forEach { album ->
+                                        val hoverSrc = remember { MutableInteractionSource() }
+                                        val hovered by hoverSrc.collectIsHoveredAsState()
+                                        val peekOffset by animateDpAsState(if (hovered) 14.dp else 0.dp, spring(dampingRatio = 0.72f, stiffness = 340f), label = "albPeek")
+                                        val matShape = RoundedCornerShape(10.dp)
+                                        Column(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .hoverable(hoverSrc)
+                                                .pointerHoverIcon(PointerIcon.Hand)
+                                                .clickable { onSelectAlbum(album) },
+                                        ) {
+                                            Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.CenterStart) {
+                                                if (peekOffset > 1.dp) {
+                                                    Canvas(
+                                                        modifier = Modifier
+                                                            .align(Alignment.CenterEnd)
+                                                            .offset(x = peekOffset)
+                                                            .fillMaxHeight(0.84f)
+                                                            .aspectRatio(1f),
+                                                    ) {
+                                                        val r = size.minDimension / 2f
+                                                        val c = Offset(r, r)
+                                                        drawCircle(
+                                                            brush = Brush.radialGradient(
+                                                                0.0f to Color(0xFF0A0A0C),
+                                                                0.70f to Color(0xFF17171B),
+                                                                0.90f to Color(0xFF25252A),
+                                                                1.0f to Color(0xFF0A0A0C),
+                                                                center = c,
+                                                                radius = r,
+                                                            ),
+                                                            radius = r,
+                                                            center = c,
+                                                        )
+                                                        for (g in 1..6) {
+                                                            drawCircle(Color.White.copy(alpha = 0.07f), radius = r * (0.55f + g * 0.06f), center = c, style = Stroke(0.7f))
+                                                        }
+                                                    }
+                                                }
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .shadow(if (hovered) 10.dp else 4.dp, matShape, ambientColor = Color.Black.copy(alpha = 0.14f))
+                                                        .clip(matShape)
+                                                        .background(surface)
+                                                        .border(0.6.dp, outline.copy(alpha = 0.8f), matShape)
+                                                        .padding(7.dp),
+                                                ) {
+                                                    DesktopAlbumCover(
+                                                        filePath = album.songs.firstOrNull()?.filePath,
+                                                        modifier = Modifier.fillMaxSize(),
+                                                        cornerRadius = 5.dp,
+                                                        iconSize = 36.dp,
+                                                    )
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.height(9.dp))
+                                            Text(album.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text("${album.artist} · ${album.songs.size} 首", fontSize = 11.5.sp, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                    repeat(cols - rowAlbums.size) { Spacer(modifier = Modifier.weight(1f)) }
+                                }
+                            }
                         }
                     }
                 }
@@ -2397,7 +2571,7 @@ private fun DesktopPlaylistsPage(
     onRenamePlaylist: (DesktopPlaylist) -> Unit,
     onDeletePlaylist: (DesktopPlaylist) -> Unit,
 ) {
-    val cardShape = RoundedCornerShape(10.dp)
+    val cardShape = RoundedCornerShape(12.dp)
     val surface = MaterialTheme.colorScheme.surface
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
@@ -2703,7 +2877,7 @@ private fun DesktopListeningReportPage(
     onPlayAt: (Int) -> Unit,
     onSelectArtist: (DesktopArtist) -> Unit,
 ) {
-    val cardShape = RoundedCornerShape(10.dp)
+    val cardShape = RoundedCornerShape(12.dp)
     val surface = MaterialTheme.colorScheme.surface
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
@@ -3018,7 +3192,7 @@ private fun DesktopSettingsPage(
                 // 0. 外观（悬浮胶囊 + 液态玻璃折射 + 纸色 + 书脊色 + 密度）
                 0 -> item(key = "sec_appearance") {
                     Column(
-                        modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp),
+                        modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(config.layoutDensity.cardPaddingDp.dp),
                         verticalArrangement = Arrangement.spacedBy(18.dp),
                     ) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -3211,7 +3385,7 @@ private fun DesktopSettingsPage(
                 // 1. 排印（实时书卷预览 + A-/滑块/A+ + 200-900 连续字重 + 0°-16° 倾斜度 + 多字体）
                 1 -> item(key = "sec_typography") {
                     Column(
-                        modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp),
+                        modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(config.layoutDensity.cardPaddingDp.dp),
                         verticalArrangement = Arrangement.spacedBy(18.dp),
                     ) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -3368,8 +3542,8 @@ private fun DesktopSettingsPage(
 
                 // 2. 曲库（文件夹 + 短音频过滤 + 睡眠定时 + 快捷键）
                 2 -> item(key = "sec_library") {
-                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(config.layoutDensity.gridSpacingDp.dp)) {
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(config.layoutDensity.cardPaddingDp.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("本地音乐文件夹", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
@@ -3392,7 +3566,7 @@ private fun DesktopSettingsPage(
                             }
                         }
 
-                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(config.layoutDensity.cardPaddingDp.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Column {
                                     Text("短音频过滤", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
@@ -3445,8 +3619,8 @@ private fun DesktopSettingsPage(
                 // 3. 音效（切歌平滑过渡 + 智能音量平衡 + 5 段防削波 EQ + 逐字歌词 + 默认沉浸场景/频谱 + 关于）
                 else -> item(key = "sec_audio") {
                     val bandLabels = listOf("60Hz", "230Hz", "910Hz", "3.6kHz", "14kHz")
-                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(config.layoutDensity.gridSpacingDp.dp)) {
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(config.layoutDensity.cardPaddingDp.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             Text("播放与听感", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Column {
@@ -3497,7 +3671,7 @@ private fun DesktopSettingsPage(
                                 }
                             }
                         }
-                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(config.layoutDensity.cardPaddingDp.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Column {
                                     Text("5 段防削波均衡器 (EQ)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = ink)
@@ -3537,7 +3711,7 @@ private fun DesktopSettingsPage(
                             }
                         }
 
-                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(config.layoutDensity.cardPaddingDp.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("默认沉浸场景", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3566,7 +3740,7 @@ private fun DesktopSettingsPage(
                                     Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = ink)
                                     Text("回归音乐本身。本地离线 · 零广告 · 遵循 Apache-2.0 / LGPL-2.1 开源声明（详见 THIRD_PARTY_LICENSES.txt）。", fontSize = 12.sp, color = muted)
                                 }
-                                Text("v4.0.1", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                                Text("v4.1.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
                             }
                         }
                     }
@@ -3982,45 +4156,63 @@ private fun UnifiedImmersiveStage(
                     }
                 }
 
-                // 3. 空间唱片廊
+                // 3. 空间唱片廊（16:9 电脑端原生左右双栏展厅构图：左 58% 3D 精装唱片走廊 + 右 42% 暗室展签与同步歌词）
                 DesktopSceneStyle.SPATIAL_GALLERY -> {
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                        val titleSp = (maxHeight.value * 0.036f).coerceIn(20f, 32f)
-                        val artistSp = (maxHeight.value * 0.022f).coerceIn(13.5f, 19f)
-                        val stampScale = (maxHeight.value / 700f).coerceIn(1.0f, 1.32f)
-                        val lyricSp = (maxHeight.value * 0.044f).coerceIn(26f, 40f)
-                        Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        val stageW = (maxHeight * 1.85f).coerceAtMost(maxWidth)
+                        val titleSp = (maxHeight.value * 0.046f).coerceIn(24f, 40f)
+                        val artistSp = (maxHeight.value * 0.024f).coerceIn(14f, 20f)
+                        val stampScale = (maxHeight.value / 700f).coerceIn(1.0f, 1.30f)
+                        val lyricSp = (maxHeight.value * 0.048f).coerceIn(26f, 44f)
+                        Row(
+                            modifier = Modifier.width(stageW).fillMaxHeight().padding(horizontal = 20.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(44.dp),
+                        ) {
                             DesktopSpatialRecordGallery(
                                 currentSong = song,
                                 allSongs = allSongs,
                                 onTogglePlayPause = onTogglePlayPause,
                                 onSkipPrevious = onSkipPrevious,
                                 onSkipNext = onSkipNext,
-                                modifier = Modifier.weight(1.3f).fillMaxWidth(),
+                                modifier = Modifier.weight(1.35f).fillMaxHeight(),
                             )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(song.title, fontSize = titleSp.sp, fontWeight = FontWeight.Bold, color = primaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(song.artist, fontSize = artistSp.sp, color = secondaryInk, maxLines = 1)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent, scale = stampScale)
-                            Spacer(modifier = Modifier.height(12.dp))
-                            DesktopEditorialLyrics(
-                                lyrics = lyrics,
-                                activeIdx = activeLyricIdx,
-                                activeColor = primaryInk,
-                                accentColor = activeAccent,
-                                secondaryColor = secondaryInk,
-                                mutedColor = secondaryInk,
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                textAlign = TextAlign.Center,
-                                useEditorialSerif = true,
-                                maxActiveSp = lyricSp,
-                                lyricFontScale = lyricFontScale,
-                                positionMs = playerState.positionMs + lyricOffsetMs,
-                                isPlaying = playerState.isPlaying,
-                                karaokeMode = karaokeLyricMode,
-                                modifier = Modifier.fillMaxWidth(0.76f),
-                            )
+                            Column(
+                                modifier = Modifier.weight(1f).fillMaxHeight().padding(end = 12.dp),
+                                horizontalAlignment = Alignment.Start,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text(
+                                    text = song.title,
+                                    fontSize = titleSp.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = primaryInk,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(song.artist, fontSize = artistSp.sp, color = secondaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.height(12.dp))
+                                DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent, scale = stampScale)
+                                Spacer(modifier = Modifier.height(32.dp))
+                                DesktopEditorialLyrics(
+                                    lyrics = lyrics,
+                                    activeIdx = activeLyricIdx,
+                                    activeColor = primaryInk,
+                                    accentColor = activeAccent,
+                                    secondaryColor = secondaryInk,
+                                    mutedColor = secondaryInk,
+                                    horizontalAlignment = Alignment.Start,
+                                    textAlign = TextAlign.Start,
+                                    useEditorialSerif = true,
+                                    maxActiveSp = lyricSp,
+                                    lyricFontScale = lyricFontScale,
+                                    positionMs = playerState.positionMs + lyricOffsetMs,
+                                    isPlaying = playerState.isPlaying,
+                                    karaokeMode = karaokeLyricMode,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }

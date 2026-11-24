@@ -92,6 +92,12 @@ enum class LibrarySubTab(val label: String) {
     FOLDERS("文件夹"),
 }
 
+enum class DesktopAlbumViewMode(val label: String) {
+    GRID_4("4列精装"),
+    GRID_6("6列高效"),
+    LIST("书目列表"),
+}
+
 enum class SortOrder(val label: String) {
     TITLE("按歌名"),
     ARTIST("按歌手"),
@@ -196,6 +202,7 @@ data class DesktopConfig(
     val darkMode: Boolean = false,
     val accentColor: DesktopAccentColor = DesktopAccentColor.CINNABAR,
     val layoutDensity: DesktopLayoutDensity = DesktopLayoutDensity.STANDARD,
+    val albumViewMode: DesktopAlbumViewMode = DesktopAlbumViewMode.GRID_6,
     val fontScale: Float = 1.0f,
     val appFontStyle: DesktopFontStyle = DesktopFontStyle.YAHEI,
     val lyricFontStyle: DesktopLyricFontStyle = DesktopLyricFontStyle.SERIF,
