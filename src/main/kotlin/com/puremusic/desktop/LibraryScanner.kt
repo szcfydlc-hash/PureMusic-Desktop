@@ -28,6 +28,10 @@ object DesktopLibraryScanner {
         customLyricOverrides = lyrics
     }
 
+    fun setCustomLyricOverride(songPath: String, lyricPath: String) {
+        customLyricOverrides = customLyricOverrides + (songPath to lyricPath)
+    }
+
     fun scanFolders(folderPaths: List<String>): List<DesktopSong> {
         val result = mutableListOf<DesktopSong>()
         val seenPaths = HashSet<String>()
@@ -331,6 +335,10 @@ object DesktopConfigStore {
         var karaokeLyricMode = DesktopKaraokeLyricMode.SMART
         var crossfadeSec = 0
         var volumeNormalizationEnabled = false
+        var autoWindowScale = true
+        var translateBaseUrl = ""
+        var translateApiKey = ""
+        var translateModel = "gpt-4o-mini"
         var eqEnabled = false
         var eqBands = listOf(0f, 0f, 0f, 0f, 0f)
         val lyricOffsets = mutableMapOf<String, Long>()
@@ -374,6 +382,10 @@ object DesktopConfigStore {
                     "karaokeLyricMode" -> DesktopKaraokeLyricMode.entries.firstOrNull { it.name == v }?.let { karaokeLyricMode = it }
                     "crossfadeSec" -> v.toIntOrNull()?.let { crossfadeSec = it.coerceIn(0, 6) }
                     "volumeNormalizationEnabled" -> volumeNormalizationEnabled = v.toBoolean()
+                    "autoWindowScale" -> autoWindowScale = v.toBoolean()
+                    "translateBaseUrl" -> translateBaseUrl = v
+                    "translateApiKey" -> translateApiKey = v
+                    "translateModel" -> if (v.isNotBlank()) translateModel = v
                     "eqEnabled" -> eqEnabled = v.toBoolean()
                     "volume" -> volume = (v.toFloatOrNull() ?: 0.85f).coerceIn(0f, 1f)
                     "repeatMode" -> repeatMode = RepeatMode.entries.firstOrNull { it.name == v } ?: RepeatMode.ALL
@@ -466,6 +478,10 @@ object DesktopConfigStore {
             karaokeLyricMode = karaokeLyricMode,
             crossfadeSec = crossfadeSec,
             volumeNormalizationEnabled = volumeNormalizationEnabled,
+            autoWindowScale = autoWindowScale,
+            translateBaseUrl = translateBaseUrl,
+            translateApiKey = translateApiKey,
+            translateModel = translateModel,
             eqEnabled = eqEnabled,
             eqBandsDb = eqBands,
             lyricOffsetsMs = lyricOffsets,
@@ -507,6 +523,10 @@ object DesktopConfigStore {
             sb.appendLine("karaokeLyricMode=${cfg.karaokeLyricMode.name}")
             sb.appendLine("crossfadeSec=${cfg.crossfadeSec}")
             sb.appendLine("volumeNormalizationEnabled=${cfg.volumeNormalizationEnabled}")
+            sb.appendLine("autoWindowScale=${cfg.autoWindowScale}")
+            sb.appendLine("translateBaseUrl=${cfg.translateBaseUrl}")
+            sb.appendLine("translateApiKey=${cfg.translateApiKey}")
+            sb.appendLine("translateModel=${cfg.translateModel}")
             sb.appendLine("eqEnabled=${cfg.eqEnabled}")
             sb.appendLine("volume=${cfg.volume}")
             sb.appendLine("repeatMode=${cfg.repeatMode.name}")
@@ -534,5 +554,145 @@ object DesktopConfigStore {
             }
             configFile.writeText(sb.toString(), StandardCharsets.UTF_8)
         }
+    }
+}
+
+/**
+ * Lightweight zero-dependency online lyric translator for Desktop (MyMemory free API + optional custom OpenAI-compatible Key).
+ */
+object DesktopLyricTranslator {
+
+    private fun detectSourceLang(lines: List<LyricLine>): String? {
+        val sample = lines.joinToString(" ") { it.primaryText }
+        var cjk = 0; var jp = 0; var ko = 0; var ru = 0; var latin = 0
+        for (ch in sample) {
+            when (ch.code) {
+                in 0x3040..0x30FF -> jp++
+                in 0xAC00..0xD7AF -> ko++
+                in 0x0400..0x04FF -> ru++
+                in 0x4E00..0x9FFF -> cjk++
+                in 0x0041..0x007A -> latin++
+            }
+        }
+        return when {
+            jp >= 4 -> "ja"
+            ko >= 4 -> "ko"
+            ru >= 6 -> "ru"
+            cjk > latin && jp == 0 && ko == 0 -> null
+            else -> "en"
+        }
+    }
+
+    private fun formatTag(ms: Long): String {
+        val m = (ms / 60_000L).coerceAtLeast(0L)
+        val s = ((ms % 60_000L) / 1000L).coerceAtLeast(0L)
+        val cs = ((ms % 1000L) / 10L).coerceAtLeast(0L)
+        return String.format(java.util.Locale.US, "[%02d:%02d.%02d]", m, s, cs)
+    }
+
+    private fun extractJsonString(json: String, key: String): String {
+        val pattern = Regex(""""$key"\s*:\s*"((?:\.|[^"\])*)"""")
+        val raw = pattern.find(json)?.groupValues?.getOrNull(1) ?: return ""
+        return raw
+            .replace("\\n", "\n")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+            .replace("\\/", "/")
+            .replace(Regex("""\\u([0-9a-fA-F]{4})""")) { m ->
+                m.groupValues[1].toInt(16).toChar().toString()
+            }
+    }
+
+    fun translateAndCacheBilingualLrc(
+        song: DesktopSong,
+        lines: List<LyricLine>,
+        customBaseUrl: String,
+        customApiKey: String,
+        customModel: String,
+    ): Result<String> = runCatching {
+        if (lines.isEmpty()) error("当前歌曲暂无歌词")
+        val src = detectSourceLang(lines) ?: error("当前歌词已是中文，无需翻译")
+        val unique = lines.map { it.primaryText.trim() }.filter { it.isNotBlank() }.distinct()
+        if (unique.isEmpty()) error("暂无有效歌词文本")
+
+        val translatedMap = LinkedHashMap<String, String>()
+        if (customApiKey.isNotBlank()) {
+            val base = customBaseUrl.trim().ifBlank { "https://api.openai.com/v1" }.trimEnd('/')
+            val endpoint = if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
+            val model = customModel.trim().ifBlank { "gpt-4o-mini" }
+            unique.chunked(30).forEach { chunk ->
+                val numbered = chunk.mapIndexed { idx, s -> "${idx + 1}. $s" }.joinToString("\n")
+                val escPrompt = numbered.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                val bodyJson = """{"model":"$model","temperature":0.2,"messages":[{"role":"system","content":"Translate each numbered song lyric line into natural Simplified Chinese. Keep the exact numbering and line count. Output only the translated lines."},{"role":"user","content":"$escPrompt"}]}"""
+                val conn = (java.net.URL(endpoint).openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                    setRequestProperty("Authorization", "Bearer ${customApiKey.trim()}")
+                }
+                try {
+                    conn.outputStream.use { it.write(bodyJson.toByteArray(StandardCharsets.UTF_8)) }
+                    if (conn.responseCode !in 200..299) error("自定义接口返回 HTTP ${conn.responseCode}")
+                    val resp = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                    val content = extractJsonString(resp, "content")
+                    content.lines().map { it.trim() }.filter { it.isNotBlank() }.forEachIndexed { idx, rawLine ->
+                        val clean = rawLine.replace(Regex("""^\d+[\.\)、:]\s*"""), "").trim()
+                        if (idx < chunk.size && clean.isNotBlank()) translatedMap[chunk[idx]] = clean
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            }
+        } else {
+            val sep = " ||| "
+            var i = 0
+            while (i < unique.size) {
+                val batch = mutableListOf<String>()
+                var len = 0
+                while (i < unique.size && batch.size < 8) {
+                    val nl = unique[i].length + sep.length
+                    if (batch.isNotEmpty() && len + nl > 400) break
+                    batch.add(unique[i]); len += nl; i++
+                }
+                val q = java.net.URLEncoder.encode(batch.joinToString(sep), "UTF-8")
+                val lp = java.net.URLEncoder.encode("$src|zh-CN", "UTF-8")
+                val conn = (java.net.URL("https://api.mymemory.translated.net/get?q=$q&langpair=$lp").openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 12_000
+                    readTimeout = 18_000
+                }
+                val resp = try {
+                    if (conn.responseCode in 200..299) conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() } else ""
+                } finally {
+                    conn.disconnect()
+                }
+                val trans = extractJsonString(resp, "translatedText")
+                if (trans.isNotBlank()) {
+                    val parts = trans.split(Regex("""\s*\|\|\|\s*"""))
+                    if (parts.size == batch.size) {
+                        batch.indices.forEach { idx ->
+                            val c = parts[idx].trim()
+                            if (c.isNotBlank()) translatedMap[batch[idx]] = c
+                        }
+                    }
+                }
+            }
+        }
+        if (translatedMap.isEmpty()) error("翻译接口暂不可用，请检查网络或配置自定义 API Key")
+
+        val lrcText = buildString {
+            lines.forEach { line ->
+                val tag = formatTag(line.timeMs)
+                val p = line.primaryText.trim()
+                append(tag).append(p).append('\n')
+                val sec = translatedMap[p]?.takeIf { it.isNotBlank() && !it.equals(p, ignoreCase = true) } ?: line.secondaryText
+                if (!sec.isNullOrBlank()) append(tag).append(sec.trim()).append('\n')
+            }
+        }
+        val cacheDir = File(File(System.getProperty("user.home"), ".puremusic"), "translated_lyrics").apply { if (!exists()) mkdirs() }
+        val outFile = File(cacheDir, "tr_${song.filePath.hashCode().toUInt()}.lrc")
+        outFile.writeText(lrcText, StandardCharsets.UTF_8)
+        outFile.absolutePath
     }
 }

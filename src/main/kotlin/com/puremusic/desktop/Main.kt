@@ -61,6 +61,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Equalizer
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.LibraryMusic
@@ -227,6 +230,8 @@ fun main() = application {
         )
     }
     var currentLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
+    var isTranslatingLyrics by remember { mutableStateOf(false) }
+    var translateStatusTip by remember { mutableStateOf<String?>(null) }
     var sleepTimerRemainingSec by remember { mutableStateOf<Int?>(null) }
 
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
@@ -491,32 +496,51 @@ fun main() = application {
         }
     }
 
-    // Strict 3-Color Bookbinding Palette (Washi Paper / Ink Charcoal + Single Accent)
+    // Android-Parity 6 Archival Bookbinding Paper Palettes (linked to selected Spine Accent)
     val rawAccent = Color(config.accentColor.hex)
-    val sidebarBg = if (config.darkMode) Color(0xFF121110) else Color(0xFFEFE9DE)
+    val (pBg, pSide, pSurf, pVar, pOut) = if (config.darkMode) {
+        when (config.accentColor) {
+            DesktopAccentColor.CINNABAR -> arrayOf(Color(0xFF161413), Color(0xFF110F0E), Color(0xFF1D1B19), Color(0xFF262320), Color(0xFF302C28))
+            DesktopAccentColor.PINE_GREEN -> arrayOf(Color(0xFF121715), Color(0xFF0E1211), Color(0xFF181F1D), Color(0xFF212A27), Color(0xFF2B3531))
+            DesktopAccentColor.PRUSSIAN_BLUE -> arrayOf(Color(0xFF12151A), Color(0xFF0E1014), Color(0xFF181C22), Color(0xFF20262E), Color(0xFF2A313C))
+            DesktopAccentColor.WALNUT -> arrayOf(Color(0xFF161411), Color(0xFF12100D), Color(0xFF1E1B17), Color(0xFF28241E), Color(0xFF332D26))
+            DesktopAccentColor.OCHRE_GOLD -> arrayOf(Color(0xFF171511), Color(0xFF12100D), Color(0xFF1F1C17), Color(0xFF29251E), Color(0xFF342F26))
+            DesktopAccentColor.PURE_INK -> arrayOf(Color(0xFF141414), Color(0xFF0F0F0F), Color(0xFF1C1C1C), Color(0xFF252525), Color(0xFF2F2F2F))
+        }
+    } else {
+        when (config.accentColor) {
+            DesktopAccentColor.CINNABAR -> arrayOf(Color(0xFFF5F0E6), Color(0xFFEDE6D9), Color(0xFFFBF8F2), Color(0xFFECE5D8), Color(0xFFDFD7C8))
+            DesktopAccentColor.PINE_GREEN -> arrayOf(Color(0xFFEFF3F0), Color(0xFFE6ECE8), Color(0xFFF7FAF8), Color(0xFFE3EAE5), Color(0xFFD3DDD6))
+            DesktopAccentColor.PRUSSIAN_BLUE -> arrayOf(Color(0xFFEEF1F5), Color(0xFFE5E9F0), Color(0xFFF7F9FC), Color(0xFFE2E7EF), Color(0xFFD2D9E4))
+            DesktopAccentColor.WALNUT -> arrayOf(Color(0xFFF4EFE7), Color(0xFFECE5DA), Color(0xFFFAF7F2), Color(0xFFEAE2D6), Color(0xFFDCD3C5))
+            DesktopAccentColor.OCHRE_GOLD -> arrayOf(Color(0xFFF6F1E5), Color(0xFFEEE8D8), Color(0xFFFBF9F2), Color(0xFFECE5D5), Color(0xFFDFD7C3))
+            DesktopAccentColor.PURE_INK -> arrayOf(Color(0xFFF3F2EF), Color(0xFFEAE9E4), Color(0xFFFAF9F7), Color(0xFFE7E5E0), Color(0xFFD9D7D1))
+        }
+    }
+    val sidebarBg = pSide
     val colorScheme = if (config.darkMode) {
         darkColorScheme(
             primary = if (config.accentColor == DesktopAccentColor.PURE_INK) Color(0xFFE0C08E) else rawAccent,
             onPrimary = Color(0xFFF6F2EA),
-            background = Color(0xFF161513),
+            background = pBg,
             onBackground = Color(0xFFF2ECE1),
-            surface = Color(0xFF1D1C19),
+            surface = pSurf,
             onSurface = Color(0xFFF2ECE1),
-            surfaceVariant = Color(0xFF262421),
-            onSurfaceVariant = Color(0xFF989187),
-            outline = Color(0xFF2E2B27),
+            surfaceVariant = pVar,
+            onSurfaceVariant = Color(0xFF9C968E),
+            outline = pOut,
         )
     } else {
         lightColorScheme(
             primary = rawAccent,
             onPrimary = Color(0xFFFDFBF7),
-            background = Color(0xFFF6F2EA),
-            onBackground = Color(0xFF221F1C),
-            surface = Color(0xFFFAF8F3),
-            onSurface = Color(0xFF221F1C),
-            surfaceVariant = Color(0xFFECE6DA),
-            onSurfaceVariant = Color(0xFF7A736A),
-            outline = Color(0xFFE2DBCE),
+            background = pBg,
+            onBackground = Color(0xFF1F1C18),
+            surface = pSurf,
+            onSurface = Color(0xFF1F1C18),
+            surfaceVariant = pVar,
+            onSurfaceVariant = Color(0xFF7A7267),
+            outline = pOut,
         )
     }
 
@@ -622,8 +646,11 @@ fun main() = application {
         },
     ) {
         val baseDensity = LocalDensity.current
+        val winScale = if (config.autoWindowScale) {
+            minOf(mainWindowState.size.width.value / 1280f, mainWindowState.size.height.value / 760f).coerceIn(0.78f, 1.42f)
+        } else 1.0f
         CompositionLocalProvider(
-            LocalDensity provides Density(baseDensity.density, fontScale = baseDensity.fontScale * scale),
+            LocalDensity provides Density(baseDensity.density, fontScale = (baseDensity.fontScale * scale * winScale).coerceIn(0.75f, 1.65f)),
             LocalLyricFontFamily provides lyricFont,
             LocalLyricSlantDegrees provides config.lyricSlantDegrees,
         ) {
@@ -694,7 +721,7 @@ fun main() = application {
                                                 color = MaterialTheme.colorScheme.onBackground,
                                             )
                                             Text(
-                                                text = "PureMusic v4.1",
+                                                text = "PureMusic v4.2",
                                                 fontSize = 10.5.sp,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
                                             )
@@ -1168,6 +1195,36 @@ fun main() = application {
                     if (song != null) {
                         UnifiedImmersiveStage(
                         karaokeLyricMode = config.karaokeLyricMode,
+                        isTranslatingLyrics = isTranslatingLyrics,
+                        translateStatusTip = translateStatusTip,
+                        onTranslateLyrics = {
+                            if (!isTranslatingLyrics && currentLyrics.isNotEmpty()) {
+                                val targetSong = song
+                                val linesSnapshot = currentLyrics
+                                isTranslatingLyrics = true
+                                translateStatusTip = "正在翻译歌词..."
+                                scope.launch(Dispatchers.IO) {
+                                    val res = DesktopLyricTranslator.translateAndCacheBilingualLrc(
+                                        song = targetSong,
+                                        lines = linesSnapshot,
+                                        customBaseUrl = config.translateBaseUrl,
+                                        customApiKey = config.translateApiKey,
+                                        customModel = config.translateModel,
+                                    )
+                                    withContext(Dispatchers.Main) {
+                                        res.onSuccess { lrcPath ->
+                                            DesktopLibraryScanner.setCustomLyricOverride(targetSong.filePath, lrcPath)
+                                            updateConfig { cfg -> cfg.copy(customLyricPaths = cfg.customLyricPaths + (targetSong.filePath to lrcPath)) }
+                                            currentLyrics = DesktopLibraryScanner.loadLyricsForSong(targetSong)
+                                            translateStatusTip = "翻译完成，已缓存双语"
+                                        }.onFailure { err ->
+                                            translateStatusTip = err.message ?: "翻译失败"
+                                        }
+                                        isTranslatingLyrics = false
+                                    }
+                                }
+                            }
+                        },
                             song = song,
                             allSongs = allSongs,
                             playerState = playerState,
@@ -1468,51 +1525,167 @@ fun main() = application {
         }
     }
 
-    // Independent Always-On-Top Draggable Mini Vinyl Floating Window
+    // Collector Floating Mini Player Window (Light Washi + Dark Dynamic Obsidian, Pin Toggle, Live Lyric & Seek Filament)
     if (showMiniVinylWindow) {
-        val miniState = rememberWindowState(size = DpSize(336.dp, 106.dp), position = WindowPosition(Alignment.BottomEnd))
+        var miniAlwaysOnTop by remember { mutableStateOf(true) }
+        val miniState = rememberWindowState(size = DpSize(416.dp, 126.dp), position = WindowPosition(Alignment.BottomEnd))
         Window(
             onCloseRequest = { showMiniVinylWindow = false },
             state = miniState,
-            title = "简约音乐 · 迷你黑胶",
+            title = "简约音乐 · Mini",
+            icon = windowAppIcon,
             undecorated = true,
             transparent = true,
-            alwaysOnTop = true,
+            alwaysOnTop = miniAlwaysOnTop,
             resizable = false,
         ) {
-            MaterialTheme(colorScheme = colorScheme) {
+            MaterialTheme(colorScheme = colorScheme, typography = scaledTypo) {
+                val miniSong = playerState.currentSong
+                val miniDark = config.darkMode
+                val miniMood = rememberSongDominantColor(miniSong?.filePath)
+                val miniBg = if (miniDark) lerp(Color(0xFF141E26), miniMood, 0.34f) else colorScheme.surface
+                val miniInk = if (miniDark) Color(0xFFF4F7F9) else colorScheme.onBackground
+                val miniMuted = if (miniDark) Color(0xFFA2B0BA) else colorScheme.onSurfaceVariant
+                val miniAccent = if (miniDark) lerp(Color(0xFFA9DAE8), miniMood, 0.35f) else colorScheme.primary
+                val miniBorder = if (miniDark) Color.White.copy(alpha = 0.14f) else colorScheme.outline
+                val miniActiveIdx = remember(currentLyrics, playerState.positionMs) {
+                    val f = currentLyrics.indexOfLast { it.timeMs <= playerState.positionMs }
+                    if (f >= 0) f else -1
+                }
+                val miniLyricText = remember(currentLyrics, miniActiveIdx) {
+                    currentLyrics.getOrNull(miniActiveIdx)?.let { splitBilingualLyric(it.primaryText, it.secondaryText).first }.orEmpty()
+                }
+                val miniProg = if (playerState.durationMs > 0L) (playerState.positionMs.toFloat() / playerState.durationMs).coerceIn(0f, 1f) else 0f
+                val miniIsFav = miniSong?.filePath in config.favoritePaths
+
                 WindowDraggableArea(modifier = Modifier.fillMaxSize()) {
-                    Row(
+                    val cardShape = RoundedCornerShape(18.dp)
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(6.dp)
-                            .shadow(14.dp, RoundedCornerShape(20.dp))
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
-                            .border(0.75.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .padding(8.dp)
+                            .shadow(14.dp, cardShape, ambientColor = Color.Black.copy(alpha = 0.28f))
+                            .clip(cardShape)
+                            .background(miniBg.copy(alpha = 0.97f))
+                            .border(0.75.dp, miniBorder, cardShape),
                     ) {
-                        DesktopSpinningVinylDisc(filePath = playerState.currentSong?.filePath, rotationDegrees = vinylAngleDeg, discSize = 66.dp)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(playerState.currentSong?.title ?: "暂未播放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(playerState.currentSong?.artist ?: "简约音乐", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                IconButton(onClick = { skipPrevious() }, modifier = Modifier.size(26.dp).pointerHoverIcon(PointerIcon.Hand)) {
-                                    Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", modifier = Modifier.size(18.dp))
+                        Row(
+                            modifier = Modifier.fillMaxSize().padding(start = 12.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // Left: 76dp Square Cover Sleeve + Peeking Grooved 180g Vinyl LP
+                            Box(modifier = Modifier.width(102.dp).height(76.dp), contentAlignment = Alignment.CenterStart) {
+                                DesktopSpinningVinylDisc(
+                                    filePath = miniSong?.filePath,
+                                    rotationDegrees = vinylAngleDeg,
+                                    discSize = 68.dp,
+                                    modifier = Modifier.align(Alignment.CenterEnd),
+                                )
+                                DesktopAlbumCover(
+                                    filePath = miniSong?.filePath,
+                                    modifier = Modifier.size(76.dp).shadow(6.dp, RoundedCornerShape(6.dp)),
+                                    cornerRadius = 6.dp,
+                                    iconSize = 24.dp,
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column(modifier = Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+                                // Top row: Title + Artist + Pin / Restore / Close
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(miniSong?.title ?: "暂未播放", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = miniInk, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                        Text(miniSong?.artist ?: "简约音乐", fontSize = 11.5.sp, color = miniMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(onClick = { miniAlwaysOnTop = !miniAlwaysOnTop }, modifier = Modifier.size(22.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                            Icon(Icons.Rounded.PushPin, contentDescription = "置顶", tint = if (miniAlwaysOnTop) miniAccent else miniMuted, modifier = Modifier.size(13.dp))
+                                        }
+                                        IconButton(onClick = { mainWindowState.isMinimized = false; showMiniVinylWindow = false }, modifier = Modifier.size(22.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                            Icon(Icons.Rounded.OpenInFull, contentDescription = "还原主窗口", tint = miniMuted, modifier = Modifier.size(13.dp))
+                                        }
+                                        IconButton(onClick = { showMiniVinylWindow = false }, modifier = Modifier.size(22.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                            Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = miniMuted, modifier = Modifier.size(13.dp))
+                                        }
+                                    }
                                 }
-                                IconButton(onClick = { togglePlayOrResume() }, modifier = Modifier.size(30.dp).pointerHoverIcon(PointerIcon.Hand)) {
-                                    Icon(if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, contentDescription = "播放/暂停", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
-                                }
-                                IconButton(onClick = { skipNext() }, modifier = Modifier.size(26.dp).pointerHoverIcon(PointerIcon.Hand)) {
-                                    Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", modifier = Modifier.size(18.dp))
+
+                                // Middle row: Live single-line synced lyric
+                                Text(
+                                    text = miniLyricText.ifBlank { "纯粹聆听 · 静享此刻" },
+                                    fontSize = 11.5.sp,
+                                    color = if (miniDark) miniAccent.copy(alpha = 0.88f) else miniMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+
+                                // Bottom row: Transport Controls + Favorite + Time
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        IconButton(onClick = { skipPrevious() }, modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                            Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", tint = miniInk, modifier = Modifier.size(18.dp))
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(30.dp)
+                                                .clip(CircleShape)
+                                                .background(miniAccent)
+                                                .pointerHoverIcon(PointerIcon.Hand)
+                                                .clickable { togglePlayOrResume() },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                                contentDescription = "播放/暂停",
+                                                tint = if (miniDark) Color(0xFF0E1820) else Color(0xFFFDFBF7),
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                        IconButton(onClick = { skipNext() }, modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                            Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", tint = miniInk, modifier = Modifier.size(18.dp))
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                val p = miniSong?.filePath ?: return@IconButton
+                                                updateConfig { cfg -> cfg.copy(favoritePaths = if (p in cfg.favoritePaths) cfg.favoritePaths - p else cfg.favoritePaths + p) }
+                                            },
+                                            modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand),
+                                        ) {
+                                            Icon(
+                                                imageVector = if (miniIsFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                                contentDescription = "收藏",
+                                                tint = if (miniIsFav) miniAccent else miniMuted,
+                                                modifier = Modifier.size(15.dp),
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = "${formatDuration(playerState.positionMs)} / ${formatDuration(playerState.durationMs)}",
+                                        fontSize = 10.5.sp,
+                                        color = miniMuted,
+                                    )
                                 }
                             }
                         }
-                        IconButton(onClick = { showMiniVinylWindow = false }, modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand)) {
-                            Icon(Icons.Rounded.Close, contentDescription = "关闭", modifier = Modifier.size(14.dp))
+                        // Bottom-edge razor-thin clickable progress filament
+                        var seekW by remember { mutableFloatStateOf(1f) }
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .onSizeChanged { seekW = it.width.toFloat().coerceAtLeast(1f) }
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .pointerInput(playerState.durationMs) {
+                                    detectTapGestures { off ->
+                                        if (playerState.durationMs > 0L) {
+                                            engine.seekTo(((off.x / seekW).coerceIn(0f, 1f) * playerState.durationMs).toLong())
+                                        }
+                                    }
+                                },
+                            contentAlignment = Alignment.BottomStart,
+                        ) {
+                            Box(modifier = Modifier.fillMaxWidth().height(2.5.dp).background(miniMuted.copy(alpha = 0.16f)))
+                            Box(modifier = Modifier.fillMaxWidth(miniProg).height(2.5.dp).background(miniAccent))
                         }
                     }
                 }
@@ -3360,6 +3533,18 @@ private fun DesktopSettingsPage(
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column {
+                                Text("窗口自适应缩放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("拖拽缩放窗口或切换 2K/4K 全屏时自动等比缩放界面比例。", fontSize = 12.sp, color = muted)
+                            }
+                            Switch(
+                                checked = config.autoWindowScale,
+                                onCheckedChange = { onUpdateConfig(config.copy(autoWindowScale = it)) },
+                                colors = SwitchDefaults.colors(checkedTrackColor = accent),
+                            )
+                        }
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
                                 Text("排版密度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
                                 Text("调节曲库列表与专辑画册的呼吸留白。", fontSize = 12.sp, color = muted)
                             }
@@ -3670,6 +3855,52 @@ private fun DesktopSettingsPage(
                                     }
                                 }
                             }
+                            HorizontalDivider(thickness = 0.5.dp, color = outline)
+                            var showDesktopApiDialog by remember { mutableStateOf(false) }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).pointerHoverIcon(PointerIcon.Hand).clickable { showDesktopApiDialog = true }.padding(vertical = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column {
+                                    Text("在线歌词翻译接口", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                    Text(
+                                        text = if (config.translateApiKey.isNotBlank()) "当前：自定义 API · 模型 ${config.translateModel}" else "当前：公开免费（MyMemory） · 点击可自填 API Key",
+                                        fontSize = 12.sp,
+                                        color = muted,
+                                    )
+                                }
+                                Text("配置", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                            }
+                            if (showDesktopApiDialog) {
+                                var urlDraft by remember(config) { mutableStateOf(config.translateBaseUrl) }
+                                var keyDraft by remember(config) { mutableStateOf(config.translateApiKey) }
+                                var modelDraft by remember(config) { mutableStateOf(config.translateModel) }
+                                AlertDialog(
+                                    onDismissRequest = { showDesktopApiDialog = false },
+                                    title = { Text("自定义在线翻译 API", fontWeight = FontWeight.Bold) },
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            Text("留空 Key 时默认走公开免费的 MyMemory 接口；填入 Key 后使用 OpenAI 兼容接口。", fontSize = 12.sp, color = muted)
+                                            OutlinedTextField(value = urlDraft, onValueChange = { urlDraft = it }, label = { Text("接口地址") }, placeholder = { Text("https://api.openai.com/v1") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                            OutlinedTextField(value = keyDraft, onValueChange = { keyDraft = it }, label = { Text("API Key（选填）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                            OutlinedTextField(value = modelDraft, onValueChange = { modelDraft = it }, label = { Text("模型名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                        }
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            onUpdateConfig(config.copy(translateBaseUrl = urlDraft.trim(), translateApiKey = keyDraft.trim(), translateModel = modelDraft.trim().ifBlank { "gpt-4o-mini" }))
+                                            showDesktopApiDialog = false
+                                        }) { Text("保存", fontWeight = FontWeight.SemiBold) }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = {
+                                            onUpdateConfig(config.copy(translateBaseUrl = "", translateApiKey = "", translateModel = "gpt-4o-mini"))
+                                            showDesktopApiDialog = false
+                                        }) { Text("恢复免费接口") }
+                                    },
+                                )
+                            }
                         }
                         Column(modifier = Modifier.fillMaxWidth().clip(cardShape).background(surface).border(0.6.dp, outline, cardShape).padding(config.layoutDensity.cardPaddingDp.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -3740,7 +3971,7 @@ private fun DesktopSettingsPage(
                                     Text("简约音乐 · PureMusic Desktop", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = ink)
                                     Text("回归音乐本身。本地离线 · 零广告 · 遵循 Apache-2.0 / LGPL-2.1 开源声明（详见 THIRD_PARTY_LICENSES.txt）。", fontSize = 12.sp, color = muted)
                                 }
-                                Text("v4.1.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
+                                Text("v4.2.0", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
                             }
                         }
                     }
@@ -3860,6 +4091,9 @@ private fun UnifiedImmersiveStage(
     onToggleEq: () -> Unit,
     onToggleQueue: () -> Unit,
     karaokeLyricMode: DesktopKaraokeLyricMode = DesktopKaraokeLyricMode.SMART,
+    isTranslatingLyrics: Boolean = false,
+    translateStatusTip: String? = null,
+    onTranslateLyrics: () -> Unit = {},
 ) {
     val isDarkScene = when (sceneStyle) {
         DesktopSceneStyle.VINYL_STUDY -> isDarkTheme
@@ -3960,9 +4194,33 @@ private fun UnifiedImmersiveStage(
                         )
                     }
 
+                    Row(
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        if (!translateStatusTip.isNullOrBlank()) {
+                            Text(translateStatusTip, fontSize = 11.5.sp, color = activeAccent)
+                        }
+                        if (lyrics.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.045f))
+                                    .border(0.6.dp, primaryInk.copy(alpha = 0.16f), RoundedCornerShape(14.dp))
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable(enabled = !isTranslatingLyrics) { onTranslateLyrics() }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(Icons.Rounded.Translate, contentDescription = "歌词翻译", tint = if (isTranslatingLyrics) activeAccent else primaryInk, modifier = Modifier.size(14.dp))
+                                Text(if (isTranslatingLyrics) "译..." else "译", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = if (isTranslatingLyrics) activeAccent else primaryInk)
+                            }
+                        }
                     IconButton(
                         onClick = onToggleFullscreen,
-                        modifier = Modifier.align(Alignment.CenterEnd).pointerHoverIcon(PointerIcon.Hand),
+                        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
                     ) {
                         Icon(
                             imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
@@ -3971,314 +4229,323 @@ private fun UnifiedImmersiveStage(
                             modifier = Modifier.size(20.dp),
                         )
                     }
+                    }
                 }
             }
         }
 
-        // 4 Cohesive Widescreen Scenes (Locked to 16:9 golden ratio, zero per-scene mismatched controls!)
+        // 16:9 Desktop-Native 1/3 Left (Vinyl/Gallery + Info) + 2/3 Right (Multi-Line Lyrics + Fluid Spectrum)
+        val isSplitMode = sceneStyle != DesktopSceneStyle.POSTER_WALL
         AnimatedContent(
             targetState = sceneStyle,
             transitionSpec = {
                 (fadeIn(tween(240)) + scaleIn(initialScale = 0.98f, animationSpec = tween(240))) togetherWith
                     fadeOut(tween(180))
             },
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = if (sceneStyle == DesktopSceneStyle.POSTER_WALL) 0.dp else 36.dp),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = if (isSplitMode) 44.dp else 0.dp, vertical = if (isSplitMode) 8.dp else 0.dp),
         ) { targetScene ->
-            when (targetScene) {
-                // 1. 黑胶书房 (Matches v3.0 mockup 1-to-1!)
-                DesktopSceneStyle.VINYL_STUDY -> {
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        val stageW = (maxHeight * 1.80f).coerceAtMost(maxWidth)
-                        val sleeveSize = min(maxHeight * 0.64f, stageW * 0.34f).coerceIn(220.dp, 500.dp)
+            if (targetScene == DesktopSceneStyle.POSTER_WALL) {
+                DesktopPosterWallStage(
+                    currentSong = song,
+                    allSongs = allSongs,
+                    vinylRotation = vinylRotation,
+                    lyrics = lyrics,
+                    activeLyricIdx = activeLyricIdx,
+                    accentColor = activeAccent,
+                    lyricFontScale = lyricFontScale,
+                    onSelectSong = onSelectSong,
+                    onTogglePlayPause = onTogglePlayPause,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                // Exact 1/3 Left + 2/3 Right 16:9 Architectural Split (1:1 with approved mockups!)
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(42.dp),
+                ) {
+                    // LEFT 1/3 (~36%): Sculptural Visual Showcase + Real Mirror Reflection + Centered Song Info
+                    BoxWithConstraints(
+                        modifier = Modifier.weight(0.37f).fillMaxHeight(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val colW = maxWidth
+                        val colH = maxHeight
+                        val sleeveSize = min(colW * 0.72f, colH * 0.46f).coerceIn(190.dp, 380.dp)
                         val discSize = sleeveSize * 0.90f
-                        val lyricSp = (maxHeight.value * 0.064f).coerceIn(30f, 56f)
-                        val titleSp = (sleeveSize.value * 0.056f).coerceIn(16f, 26f)
-                        val stampScale = (sleeveSize.value / 280f).coerceIn(1.0f, 1.35f)
-                        Row(
-                            modifier = Modifier.width(stageW).fillMaxHeight().padding(horizontal = 24.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(56.dp),
+                        val titleSp = (colW.value * 0.056f).coerceIn(18f, 28f)
+                        val artistSp = (colW.value * 0.034f).coerceIn(13f, 18f)
+
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
                         ) {
-                            Column(modifier = Modifier.width(sleeveSize + discSize * 0.35f), horizontalAlignment = Alignment.CenterHorizontally) {
-                                val reflH = 34.dp
-                                Box(
-                                    modifier = Modifier.width(sleeveSize + discSize * 0.35f).height(sleeveSize + reflH).pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onTogglePlayPause),
-                                    contentAlignment = Alignment.TopStart,
-                                ) {
-                                    // Ambient halo behind black vinyl in dark mode
-                                    if (isDarkScene) {
-                                        Canvas(modifier = Modifier.align(Alignment.TopCenter).size(sleeveSize * 1.15f)) {
-                                            drawCircle(
-                                                brush = Brush.radialGradient(
-                                                    0.0f to animatedMood.copy(alpha = 0.26f),
-                                                    0.55f to animatedMood.copy(alpha = 0.08f),
+                            when (targetScene) {
+                                DesktopSceneStyle.VINYL_STUDY -> {
+                                    val reflH = 38.dp
+                                    Box(
+                                        modifier = Modifier
+                                            .width(sleeveSize + discSize * 0.36f)
+                                            .height(sleeveSize + reflH)
+                                            .pointerHoverIcon(PointerIcon.Hand)
+                                            .clickable(onClick = onTogglePlayPause),
+                                        contentAlignment = Alignment.TopStart,
+                                    ) {
+                                        if (isDarkScene) {
+                                            Canvas(modifier = Modifier.align(Alignment.TopCenter).size(sleeveSize * 1.18f)) {
+                                                drawCircle(
+                                                    brush = Brush.radialGradient(
+                                                        0.0f to animatedMood.copy(alpha = 0.28f),
+                                                        0.55f to animatedMood.copy(alpha = 0.09f),
+                                                        1.0f to Color.Transparent,
+                                                        center = center,
+                                                        radius = size.minDimension / 2f,
+                                                    ),
+                                                )
+                                            }
+                                        }
+                                        // Real vertically-mirrored sleeve reflection dissolving cleanly into obsidian surface
+                                        val reflAlpha = if (isDarkScene) 0.32f else 0.14f
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopStart)
+                                                .offset(y = sleeveSize)
+                                                .width(sleeveSize)
+                                                .height(reflH)
+                                                .clip(RectangleShape)
+                                                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                                                .drawWithContent {
+                                                    drawContent()
+                                                    drawRect(
+                                                        brush = Brush.verticalGradient(
+                                                            0.00f to Color.Black.copy(alpha = reflAlpha),
+                                                            0.30f to Color.Black.copy(alpha = reflAlpha * 0.44f),
+                                                            0.70f to Color.Black.copy(alpha = reflAlpha * 0.10f),
+                                                            1.00f to Color.Transparent,
+                                                        ),
+                                                        blendMode = BlendMode.DstIn,
+                                                    )
+                                                },
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomStart)
+                                                    .size(sleeveSize)
+                                                    .graphicsLayer { scaleY = -1f },
+                                            ) {
+                                                DesktopAlbumCover(filePath = song.filePath, modifier = Modifier.fillMaxSize(), cornerRadius = 0.dp, iconSize = 44.dp)
+                                            }
+                                        }
+                                        // Razor-thin tabletop contact shadow
+                                        Canvas(
+                                            modifier = Modifier
+                                                .align(Alignment.TopStart)
+                                                .offset(y = sleeveSize - 1.dp)
+                                                .width(sleeveSize)
+                                                .height(7.dp),
+                                        ) {
+                                            drawRect(
+                                                brush = Brush.verticalGradient(
+                                                    0.0f to Color.Black.copy(alpha = if (isDarkScene) 0.62f else 0.22f),
+                                                    0.45f to Color.Black.copy(alpha = if (isDarkScene) 0.22f else 0.07f),
                                                     1.0f to Color.Transparent,
-                                                    center = center,
-                                                    radius = size.minDimension / 2f,
                                                 ),
                                             )
                                         }
-                                    }
-                                    // Real vertically-mirrored sleeve reflection with offscreen DstIn dissolve
-                                    val reflAlpha = if (isDarkScene) 0.30f else 0.14f
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.TopStart)
-                                            .offset(y = sleeveSize)
-                                            .width(sleeveSize)
-                                            .height(reflH)
-                                            .clip(RectangleShape)
-                                            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                                            .drawWithContent {
-                                                drawContent()
-                                                drawRect(
-                                                    brush = Brush.verticalGradient(
-                                                        0.00f to Color.Black.copy(alpha = reflAlpha),
-                                                        0.32f to Color.Black.copy(alpha = reflAlpha * 0.44f),
-                                                        0.72f to Color.Black.copy(alpha = reflAlpha * 0.10f),
-                                                        1.00f to Color.Transparent,
-                                                    ),
-                                                    blendMode = BlendMode.DstIn,
-                                                )
-                                            },
-                                    ) {
+                                        DesktopSpinningVinylDisc(
+                                            filePath = song.filePath,
+                                            rotationDegrees = vinylRotation,
+                                            discSize = discSize,
+                                            modifier = Modifier.align(Alignment.TopEnd).offset(y = (sleeveSize - discSize) / 2f),
+                                        )
                                         Box(
                                             modifier = Modifier
-                                                .align(Alignment.BottomStart)
+                                                .align(Alignment.TopStart)
                                                 .size(sleeveSize)
-                                                .graphicsLayer { scaleY = -1f },
+                                                .shadow(22.dp, RoundedCornerShape(3.dp))
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(if (isDarkScene) Color(0xFF1F1D1B) else Color(0xFFF3EFE6)),
                                         ) {
                                             DesktopAlbumCover(filePath = song.filePath, modifier = Modifier.fillMaxSize(), cornerRadius = 0.dp, iconSize = 48.dp)
                                         }
                                     }
-                                    // Razor-thin tabletop contact shadow directly under sleeve edge
-                                    Canvas(
-                                        modifier = Modifier
-                                            .align(Alignment.TopStart)
-                                            .offset(y = sleeveSize - 1.dp)
-                                            .width(sleeveSize)
-                                            .height(7.dp),
-                                    ) {
-                                        drawRect(
-                                            brush = Brush.verticalGradient(
-                                                0.0f to Color.Black.copy(alpha = if (isDarkScene) 0.58f else 0.22f),
-                                                0.45f to Color.Black.copy(alpha = if (isDarkScene) 0.20f else 0.07f),
-                                                1.0f to Color.Transparent,
-                                            ),
+                                }
+
+                                DesktopSceneStyle.SPATIAL_GALLERY -> {
+                                    DesktopSpatialRecordGallery(
+                                        currentSong = song,
+                                        allSongs = allSongs,
+                                        onTogglePlayPause = onTogglePlayPause,
+                                        onSkipPrevious = onSkipPrevious,
+                                        onSkipNext = onSkipNext,
+                                        modifier = Modifier.fillMaxWidth().height((colH * 0.56f).coerceIn(240.dp, 460.dp)),
+                                    )
+                                }
+
+                                else -> {
+                                    // VINYL_LIGHTFIELD
+                                    val giantDisc = min(colW * 0.84f, colH * 0.54f).coerceIn(210.dp, 400.dp)
+                                    Box(contentAlignment = Alignment.Center) {
+                                        DesktopSpinningVinylDisc(
+                                            filePath = song.filePath,
+                                            rotationDegrees = vinylRotation,
+                                            discSize = giantDisc,
+                                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onTogglePlayPause),
+                                        )
+                                        DesktopTonearm(
+                                            isPlaying = playerState.isPlaying,
+                                            length = giantDisc * 0.72f,
+                                            modifier = Modifier.align(Alignment.TopEnd).offset(x = giantDisc * 0.14f, y = (-6).dp),
                                         )
                                     }
-                                    DesktopSpinningVinylDisc(filePath = song.filePath, rotationDegrees = vinylRotation, discSize = discSize, modifier = Modifier.align(Alignment.TopEnd).offset(y = (sleeveSize - discSize) / 2f))
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.TopStart)
-                                            .size(sleeveSize)
-                                            .shadow(22.dp, RoundedCornerShape(3.dp))
-                                            .clip(RoundedCornerShape(3.dp))
-                                            .background(if (isDarkScene) Color(0xFF1F1D1B) else Color(0xFFF3EFE6)),
-                                    ) {
-                                        DesktopAlbumCover(filePath = song.filePath, modifier = Modifier.fillMaxSize(), cornerRadius = 0.dp, iconSize = 48.dp)
-                                    }
                                 }
-                                Spacer(modifier = Modifier.height(20.dp))
-                                Text("${song.title}  -  ${song.artist}", fontSize = titleSp.sp, fontWeight = FontWeight.SemiBold, color = primaryInk, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                DesktopAudioSpecStamp(song = song, isDarkSurface = isDarkScene, accentColor = activeAccent, scale = stampScale)
                             }
 
-                            DesktopEditorialLyrics(
-                                lyrics = lyrics,
-                                activeIdx = activeLyricIdx,
-                                activeColor = primaryInk,
-                                accentColor = activeAccent,
-                                secondaryColor = secondaryInk,
-                                mutedColor = secondaryInk,
-                                horizontalAlignment = Alignment.Start,
-                                textAlign = TextAlign.Start,
-                                highlightAccent = true,
-                                useEditorialSerif = true,
-                                maxActiveSp = lyricSp,
-                                lyricFontScale = lyricFontScale,
-                                positionMs = playerState.positionMs + lyricOffsetMs,
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Text(
+                                text = song.title,
+                                fontSize = titleSp.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = primaryInk,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = song.artist,
+                                fontSize = artistSp.sp,
+                                color = secondaryInk,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            DesktopAudioSpecStamp(song = song, isDarkSurface = isDarkScene, accentColor = activeAccent, scale = 1.05f)
+                        }
+                    }
+
+                    // RIGHT 2/3 (~63%): Upper Multi-Line Scrolling Bilingual Karaoke Lyrics + Lower Fluid Spectrum & Minimal Controls
+                    Column(
+                        modifier = Modifier.weight(0.63f).fillMaxHeight().padding(top = 8.dp, bottom = 14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        // Upper ~74%: 5-7 Line Smoothly Faded Bilingual Scrolling Karaoke Lyrics
+                        DesktopMultiLineScrollingLyrics(
+                            lyrics = lyrics,
+                            activeIdx = activeLyricIdx,
+                            positionMs = playerState.positionMs + lyricOffsetMs,
+                            isPlaying = playerState.isPlaying,
+                            karaokeMode = karaokeLyricMode,
+                            activeColor = primaryInk,
+                            accentColor = activeAccent,
+                            secondaryColor = secondaryInk,
+                            mutedColor = secondaryInk,
+                            lyricFontScale = lyricFontScale,
+                            onSeekTo = onSeekTo,
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Lower ~26%: Fluid Silk-Ribbon Spectrum + Razor-Thin Progress Line + Timestamps
+                        if (showSpectrum) {
+                            DesktopLiveSpectrumBar(
+                                songId = song.id,
+                                positionMs = playerState.positionMs,
+                                durationMs = playerState.durationMs,
                                 isPlaying = playerState.isPlaying,
-                                karaokeMode = karaokeLyricMode,
-                                modifier = Modifier.weight(1f),
+                                spectrumStyle = spectrumStyle,
+                                playedColor = if (isDarkScene) lerp(primaryInk, animatedMood, 0.32f) else accentColor,
+                                unplayedColor = primaryInk.copy(alpha = 0.24f),
+                                accentColor = activeAccent,
+                                timestampColor = secondaryInk.copy(alpha = 0.85f),
+                                onSeekTo = onSeekTo,
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
-                    }
-                }
 
-                // 2. 黑胶光场
-                DesktopSceneStyle.VINYL_LIGHTFIELD -> {
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        val stageW = (maxHeight * 1.80f).coerceAtMost(maxWidth)
-                        val giantDisc = min(maxHeight * 0.78f, stageW * 0.44f).coerceIn(260.dp, 620.dp)
-                        val lyricSp = (maxHeight.value * 0.058f).coerceIn(28f, 52f)
-                        val titleSp = (maxHeight.value * 0.042f).coerceIn(22f, 36f)
-                        val artistSp = (maxHeight.value * 0.024f).coerceIn(14f, 20f)
-                        val stampScale = (maxHeight.value / 700f).coerceIn(1.0f, 1.35f)
-                        Row(
-                            modifier = Modifier.width(stageW).fillMaxHeight().padding(horizontal = 24.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(52.dp),
-                        ) {
-                            Box(modifier = Modifier.weight(1.1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    DesktopSpinningVinylDisc(filePath = song.filePath, rotationDegrees = vinylRotation, discSize = giantDisc, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onTogglePlayPause))
-                                    DesktopTonearm(isPlaying = playerState.isPlaying, length = giantDisc * 0.72f, modifier = Modifier.align(Alignment.TopEnd).offset(x = giantDisc * 0.15f, y = (-6).dp))
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                                Text(song.title, fontSize = titleSp.sp, fontWeight = FontWeight.Bold, color = primaryInk, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(song.artist, fontSize = artistSp.sp, color = secondaryInk, textAlign = TextAlign.Center, maxLines = 1)
-                                Spacer(modifier = Modifier.height(10.dp))
-                                DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent, scale = stampScale)
-                                Spacer(modifier = Modifier.height(28.dp))
-                                DesktopEditorialLyrics(
-                                    lyrics = lyrics,
-                                    activeIdx = activeLyricIdx,
-                                    activeColor = primaryInk,
-                                    accentColor = activeAccent,
-                                    secondaryColor = secondaryInk,
-                                    mutedColor = secondaryInk,
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    textAlign = TextAlign.Center,
-                                    useEditorialSerif = true,
-                                    maxActiveSp = lyricSp,
-                                    lyricFontScale = lyricFontScale,
-                                    positionMs = playerState.positionMs + lyricOffsetMs,
-                                    isPlaying = playerState.isPlaying,
-                                    karaokeMode = karaokeLyricMode,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                        }
-                    }
-                }
+                        Spacer(modifier = Modifier.height(6.dp))
 
-                // 3. 空间唱片廊（16:9 电脑端原生左右双栏展厅构图：左 58% 3D 精装唱片走廊 + 右 42% 暗室展签与同步歌词）
-                DesktopSceneStyle.SPATIAL_GALLERY -> {
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        val stageW = (maxHeight * 1.85f).coerceAtMost(maxWidth)
-                        val titleSp = (maxHeight.value * 0.046f).coerceIn(24f, 40f)
-                        val artistSp = (maxHeight.value * 0.024f).coerceIn(14f, 20f)
-                        val stampScale = (maxHeight.value / 700f).coerceIn(1.0f, 1.30f)
-                        val lyricSp = (maxHeight.value * 0.048f).coerceIn(26f, 44f)
+                        // Discreet Minimalist Transport Controls strictly tucked beneath the Right-2/3 Spectrum
                         Row(
-                            modifier = Modifier.width(stageW).fillMaxHeight().padding(horizontal = 20.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(44.dp),
+                            horizontalArrangement = Arrangement.Center,
                         ) {
-                            DesktopSpatialRecordGallery(
-                                currentSong = song,
-                                allSongs = allSongs,
-                                onTogglePlayPause = onTogglePlayPause,
-                                onSkipPrevious = onSkipPrevious,
-                                onSkipNext = onSkipNext,
-                                modifier = Modifier.weight(1.35f).fillMaxHeight(),
-                            )
-                            Column(
-                                modifier = Modifier.weight(1f).fillMaxHeight().padding(end = 12.dp),
-                                horizontalAlignment = Alignment.Start,
-                                verticalArrangement = Arrangement.Center,
+                            IconButton(onClick = onToggleShuffle, modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                Icon(Icons.Rounded.Shuffle, contentDescription = "随机", tint = if (playerState.shuffleEnabled) activeAccent else secondaryInk.copy(alpha = 0.72f), modifier = Modifier.size(16.dp))
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = onSkipPrevious, modifier = Modifier.size(34.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首", tint = primaryInk, modifier = Modifier.size(21.dp))
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isDarkScene) Color.White.copy(alpha = 0.14f) else accentColor)
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable(onClick = onTogglePlayPause),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Text(
-                                    text = song.title,
-                                    fontSize = titleSp.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = primaryInk,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
+                                Icon(
+                                    imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = "播放/暂停",
+                                    tint = if (isDarkScene) primaryInk else Color(0xFFFDFBF7),
+                                    modifier = Modifier.size(22.dp),
                                 )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(song.artist, fontSize = artistSp.sp, color = secondaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Spacer(modifier = Modifier.height(12.dp))
-                                DesktopAudioSpecStamp(song = song, isDarkSurface = true, accentColor = activeAccent, scale = stampScale)
-                                Spacer(modifier = Modifier.height(32.dp))
-                                DesktopEditorialLyrics(
-                                    lyrics = lyrics,
-                                    activeIdx = activeLyricIdx,
-                                    activeColor = primaryInk,
-                                    accentColor = activeAccent,
-                                    secondaryColor = secondaryInk,
-                                    mutedColor = secondaryInk,
-                                    horizontalAlignment = Alignment.Start,
-                                    textAlign = TextAlign.Start,
-                                    useEditorialSerif = true,
-                                    maxActiveSp = lyricSp,
-                                    lyricFontScale = lyricFontScale,
-                                    positionMs = playerState.positionMs + lyricOffsetMs,
-                                    isPlaying = playerState.isPlaying,
-                                    karaokeMode = karaokeLyricMode,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            IconButton(onClick = onSkipNext, modifier = Modifier.size(34.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                Icon(Icons.Rounded.SkipNext, contentDescription = "下一首", tint = primaryInk, modifier = Modifier.size(21.dp))
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = onToggleFavorite, modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                Icon(if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, contentDescription = "收藏", tint = if (isFavorite) activeAccent else secondaryInk.copy(alpha = 0.72f), modifier = Modifier.size(16.dp))
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = onToggleEq, modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                Icon(Icons.Rounded.Equalizer, contentDescription = "均衡器", tint = if (eqActive) activeAccent else secondaryInk.copy(alpha = 0.72f), modifier = Modifier.size(16.dp))
+                            }
+                            IconButton(onClick = onToggleQueue, modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                Icon(Icons.Rounded.QueueMusic, contentDescription = "队列", tint = if (queueOpen) activeAccent else secondaryInk.copy(alpha = 0.72f), modifier = Modifier.size(16.dp))
                             }
                         }
                     }
                 }
-
-                // 4. 唱片海报墙
-                DesktopSceneStyle.POSTER_WALL -> {
-                    DesktopPosterWallStage(
-                        currentSong = song,
-                        allSongs = allSongs,
-                        vinylRotation = vinylRotation,
-                        lyrics = lyrics,
-                        activeLyricIdx = activeLyricIdx,
-                        accentColor = activeAccent,
-                        lyricFontScale = lyricFontScale,
-                        onSelectSong = onSelectSong,
-                        onTogglePlayPause = onTogglePlayPause,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
             }
         }
 
-        // Optional Silky 60fps 256-Point FFT Live Spectrum right above the Unified Control Rail
-        AnimatedVisibility(
-            visible = showSpectrum,
-            enter = fadeIn(tween(200)) + expandVertically(),
-            exit = fadeOut(tween(180)) + shrinkVertically(),
-        ) {
-            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 36.dp, vertical = 4.dp)) {
-                DesktopLiveSpectrumBar(
-                    songId = song.id,
-                    positionMs = playerState.positionMs,
-                    durationMs = playerState.durationMs,
-                    isPlaying = playerState.isPlaying,
-                    spectrumStyle = spectrumStyle,
-                    playedColor = primaryInk,
-                    unplayedColor = primaryInk.copy(alpha = 0.22f),
-                    accentColor = activeAccent,
-                    timestampColor = Color.Transparent,
-                    onSeekTo = onSeekTo,
-                )
-            }
+        // Only Poster Wall uses the full-width bottom rail; the 3 split scenes have their own integrated Right-2/3 spectrum & controls!
+        if (!isSplitMode) {
+            UnifiedBottomControlRail(
+                playerState = playerState,
+                isFavorite = isFavorite,
+                isImmersive = true,
+                isDarkSurface = isDarkScene,
+                accentColor = activeAccent,
+                eqActive = eqActive,
+                queueOpen = queueOpen,
+                spectrumVisible = showSpectrum,
+                onOpenImmersive = onClose,
+                onToggleFavorite = onToggleFavorite,
+                onToggleShuffle = onToggleShuffle,
+                onCycleRepeat = onCycleRepeat,
+                onSkipPrevious = onSkipPrevious,
+                onTogglePlayPause = onTogglePlayPause,
+                onSkipNext = onSkipNext,
+                onSeekTo = onSeekTo,
+                onVolumeChange = onVolumeChange,
+                onToggleEq = onToggleEq,
+                onToggleQueue = onToggleQueue,
+                onToggleSpectrum = onToggleSpectrum,
+            )
         }
-
-        // Exact Same Unified Bottom Control Rail across ALL 4 Immersive Scenes!
-        UnifiedBottomControlRail(
-            playerState = playerState,
-            isFavorite = isFavorite,
-            isImmersive = true,
-            isDarkSurface = isDarkScene,
-            accentColor = activeAccent,
-            eqActive = eqActive,
-            queueOpen = queueOpen,
-            spectrumVisible = showSpectrum,
-            onOpenImmersive = {},
-            onToggleFavorite = onToggleFavorite,
-            onToggleShuffle = onToggleShuffle,
-            onCycleRepeat = onCycleRepeat,
-            onSkipPrevious = onSkipPrevious,
-            onTogglePlayPause = onTogglePlayPause,
-            onSkipNext = onSkipNext,
-            onSeekTo = onSeekTo,
-            onVolumeChange = onVolumeChange,
-            onToggleEq = onToggleEq,
-            onToggleQueue = onToggleQueue,
-            onToggleSpectrum = onToggleSpectrum,
-        )
     }
 }

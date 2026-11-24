@@ -1546,29 +1546,45 @@ fun DesktopLiveSpectrumBar(
         }
     }
 
+    val spatialScratch = remember { FloatArray(barCount) }
     LaunchedEffect(isPlaying, songId) {
         var lastNanos = 0L
         while (true) {
             withFrameNanos { nanos ->
-                val dt = if (lastNanos == 0L) 0.016f else ((nanos - lastNanos) / 1_000_000_000f).coerceIn(0.004f, 0.05f)
+                val dt = if (lastNanos == 0L) 0f else ((nanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
                 lastNanos = nanos
-                if (isPlaying) phaseTime += dt * 3.2f
+                if (isPlaying) phaseTime += dt * 2.1f
 
                 val liveBands = DesktopSpectrumBus.bands.value
-                val attackRate = 1f - kotlin.math.exp((-22f * dt).toDouble()).toFloat()
-                val releaseRate = 1f - kotlin.math.exp((-7.5f * dt).toDouble()).toFloat()
+                // Fluid liquid-silk asymmetric damping (graceful rise, velvet slow decay)
+                val attackRate = 1f - kotlin.math.exp((-9.2f * dt).toDouble()).toFloat()
+                val releaseRate = 1f - kotlin.math.exp((-3.6f * dt).toDouble()).toFloat()
 
                 for (i in 0 until barCount) {
+                    val u = i.toFloat() / (barCount - 1).coerceAtLeast(1)
                     val target = if (isPlaying) {
                         val raw = liveBands.getOrElse(i) { 0f }
-                        val subtleBreath = 0.045f + 0.025f * sin(phaseTime + i * 0.28f)
-                        (raw * 0.94f + subtleBreath).coerceIn(0.04f, 1.0f)
+                        val organicFlow = 0.06f + 0.045f * (0.5f + 0.5f * sin(phaseTime + u * 7.2f))
+                        (raw * 0.88f + organicFlow).coerceIn(0.05f, 1.0f)
                     } else {
-                        restingContour[i] * 0.42f
+                        restingContour[i] * 0.36f
                     }
                     val cur = animatedLevels[i]
                     val nextVal = cur + (target - cur) * if (target > cur) attackRate else releaseRate
                     animatedLevels[i] = nextVal
+                }
+                // 2-pass spatial Gaussian smoothing so adjacent bars glide like silk water instead of jittering
+                repeat(2) {
+                    for (i in 0 until barCount) {
+                        val prev = animatedLevels[(i - 1).coerceAtLeast(0)]
+                        val mid = animatedLevels[i]
+                        val nxt = animatedLevels[(i + 1).coerceAtMost(barCount - 1)]
+                        spatialScratch[i] = prev * 0.22f + mid * 0.56f + nxt * 0.22f
+                    }
+                    System.arraycopy(spatialScratch, 0, animatedLevels, 0, barCount)
+                }
+                for (i in 0 until barCount) {
+                    val nextVal = animatedLevels[i]
 
                     if (nextVal >= peakDots[i]) {
                         peakDots[i] = nextVal
@@ -1658,6 +1674,31 @@ fun DesktopLiveSpectrumBar(
                                 cornerRadius = CornerRadius(barW * 0.5f, barW * 0.5f),
                             )
                         }
+                        // Luminous fluid cubic-spline crest ribbon floating silkily across the micro-bars
+                        val crestPath = Path()
+                        var px = 0f; var py = baseY
+                        for (i in 0 until displayBars) {
+                            val u = i.toFloat() / (displayBars - 1).coerceAtLeast(1)
+                            val edgeTaper = sin(u * PI).toFloat().coerceIn(0.22f, 1f)
+                            val level = sampleSmooth(animatedLevels, u) * edgeTaper
+                            val cx = i * step + step * 0.5f
+                            val isPlayed = cx <= playheadX
+                            val barH = if (isPlayed) ((totalH - 10f) * level * 0.92f).coerceAtLeast(2.6f)
+                            else ((totalH - 12f) * level * 0.36f).coerceAtLeast(2.0f)
+                            val cy = (baseY - barH - 2.2f).coerceAtLeast(2f)
+                            if (i == 0) crestPath.moveTo(cx, cy)
+                            else crestPath.quadraticTo(px, py, (px + cx) * 0.5f, (py + cy) * 0.5f)
+                            px = cx; py = cy
+                        }
+                        crestPath.lineTo(px, py)
+                        clipRect(0f, 0f, playheadX, totalH) {
+                            drawPath(crestPath, color = playedColor.copy(alpha = 0.24f), style = Stroke(5.5f, cap = StrokeCap.Round))
+                            drawPath(crestPath, color = playedColor.copy(alpha = 0.94f), style = Stroke(1.8f, cap = StrokeCap.Round))
+                        }
+                        clipRect(playheadX, 0f, totalW, totalH) {
+                            drawPath(crestPath, color = unplayedColor.copy(alpha = 0.55f), style = Stroke(1.2f, cap = StrokeCap.Round))
+                        }
+
                         // Razor-thin architectural horizon baseline + played progress filament
                         drawLine(
                             color = unplayedColor.copy(alpha = 0.28f),
@@ -2402,6 +2443,182 @@ fun DesktopAlphabetIndexBar(
                         else -> ink.copy(alpha = 0.24f)
                     },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 16:9 Desktop-Native Multi-Line Scrolling Bilingual Lyrics (5-7 visible lines, smooth offscreen top/bottom fade,
+ * 60fps word-by-word karaoke sweep on the active line, click any line to seek).
+ */
+@Composable
+fun DesktopMultiLineScrollingLyrics(
+    lyrics: List<LyricLine>,
+    activeIdx: Int,
+    positionMs: Long,
+    isPlaying: Boolean,
+    karaokeMode: DesktopKaraokeLyricMode,
+    activeColor: Color,
+    accentColor: Color,
+    secondaryColor: Color,
+    mutedColor: Color,
+    lyricFontScale: Float = 1f,
+    onSeekTo: (Long) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val family = LocalLyricFontFamily.current
+    val slantDeg = LocalLyricSlantDegrees.current
+    val effectiveStyle = if (slantDeg >= 4f) FontStyle.Italic else FontStyle.Normal
+    val lScale = lyricFontScale.coerceIn(0.78f, 1.40f)
+
+    if (lyrics.isEmpty()) {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            Text(
+                text = "纯粹聆听 · 静享此刻",
+                fontSize = (22f * lScale).sp,
+                fontFamily = family,
+                fontStyle = effectiveStyle,
+                color = mutedColor.copy(alpha = 0.72f),
+            )
+        }
+        return
+    }
+
+    val safeActive = activeIdx.coerceIn(0, lyrics.lastIndex)
+    val windowIndices = remember(safeActive, lyrics.size) {
+        ((safeActive - 2)..(safeActive + 2)).toList()
+    }
+
+    Box(
+        modifier = modifier
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0.00f to Color.Transparent,
+                        0.16f to Color.Black,
+                        0.84f to Color.Black,
+                        1.00f to Color.Transparent,
+                    ),
+                    blendMode = BlendMode.DstIn,
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically),
+        ) {
+            windowIndices.forEach { idx ->
+                val line = lyrics.getOrNull(idx)
+                val dist = abs(idx - safeActive)
+                val isActive = idx == safeActive
+                val alphaFactor = when (dist) {
+                    0 -> 1.0f
+                    1 -> 0.54f
+                    else -> 0.28f
+                }
+                if (line == null) {
+                    Spacer(modifier = Modifier.height(34.dp))
+                } else {
+                    val (primary, secondary) = remember(line) {
+                        splitBilingualLyric(line.primaryText, line.secondaryText)
+                    }
+                    val nextLine = lyrics.getOrNull(idx + 1)
+                    val primarySp = (if (isActive) 27f else 19f) * lScale
+                    val secondarySp = (if (isActive) 17.5f else 14f) * lScale
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { if (line.timeMs >= 0L) onSeekTo(line.timeMs) }
+                            .padding(vertical = 2.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        if (isActive && primary.isNotEmpty() && positionMs > 0L) {
+                            val useKaraoke = when (karaokeMode) {
+                                DesktopKaraokeLyricMode.CLASSIC -> false
+                                DesktopKaraokeLyricMode.EXACT_ONLY -> line.words.isNotEmpty()
+                                DesktopKaraokeLyricMode.SMART -> true
+                            }
+                            if (useKaraoke) {
+                                val unlit = mutedColor.copy(alpha = 0.46f)
+                                val lineDur = ((nextLine?.timeMs ?: (line.timeMs + 4200L)) - line.timeMs).coerceIn(1200L, 12000L)
+                                val annotated = if (line.words.isNotEmpty()) {
+                                    buildAnnotatedString {
+                                        line.words.forEach { w ->
+                                            val prog = ((positionMs - w.startMs).toFloat() / (w.endMs - w.startMs).coerceAtLeast(1L)).coerceIn(0f, 1f)
+                                            withStyle(SpanStyle(color = lerp(unlit, activeColor, prog))) { append(w.text) }
+                                        }
+                                    }
+                                } else {
+                                    val prog = ((positionMs - line.timeMs).toFloat() / (lineDur * 0.88f)).coerceIn(0f, 1f)
+                                    val lit = (primary.length * prog).toInt().coerceIn(0, primary.length)
+                                    buildAnnotatedString {
+                                        if (lit > 0) withStyle(SpanStyle(color = activeColor)) { append(primary.substring(0, lit)) }
+                                        if (lit < primary.length) withStyle(SpanStyle(color = unlit)) { append(primary.substring(lit)) }
+                                    }
+                                }
+                                Text(
+                                    text = annotated,
+                                    fontSize = primarySp.sp,
+                                    lineHeight = (primarySp * 1.28f).sp,
+                                    fontFamily = family,
+                                    fontStyle = effectiveStyle,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            } else {
+                                Text(
+                                    text = primary,
+                                    fontSize = primarySp.sp,
+                                    lineHeight = (primarySp * 1.28f).sp,
+                                    fontFamily = family,
+                                    fontStyle = effectiveStyle,
+                                    fontWeight = FontWeight.Bold,
+                                    color = activeColor,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = primary,
+                                fontSize = primarySp.sp,
+                                lineHeight = (primarySp * 1.28f).sp,
+                                fontFamily = family,
+                                fontStyle = effectiveStyle,
+                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                                color = (if (isActive) activeColor else mutedColor).copy(alpha = alphaFactor),
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (!secondary.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = secondary,
+                                fontSize = secondarySp.sp,
+                                lineHeight = (secondarySp * 1.25f).sp,
+                                fontFamily = family,
+                                fontStyle = effectiveStyle,
+                                color = (if (isActive) secondaryColor else mutedColor).copy(alpha = if (isActive) 0.90f else alphaFactor * 0.82f),
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
