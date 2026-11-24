@@ -1531,7 +1531,9 @@ fun DesktopLiveSpectrumBar(
 ) {
     val barCount = DesktopSpectrumBus.BAND_COUNT
     val animatedLevels = remember { FloatArray(barCount) { 0.08f } }
+    val waveLevels = remember { FloatArray(barCount) { 0.08f } }
     val peakDots = remember { FloatArray(barCount) { 0.08f } }
+    val peakHold = remember { FloatArray(barCount) { 0f } }
     val peakVel = remember { FloatArray(barCount) { 0f } }
     var frameTick by remember { mutableLongStateOf(0L) }
     var phaseTime by remember { mutableFloatStateOf(0f) }
@@ -1540,57 +1542,57 @@ fun DesktopLiveSpectrumBar(
         val seed = songId.hashCode()
         FloatArray(barCount) { i ->
             val u = i.toFloat() / (barCount - 1)
-            val env = sin(u * PI).toFloat().coerceAtLeast(0.18f)
-            val wave = 0.5f + 0.5f * sin(i * 0.45f + (seed and 0xFF) * 0.1f)
+            val env = sin(u * PI).toFloat().coerceAtLeast(0.22f)
+            val wave = 0.5f + 0.5f * sin(i * 0.42f + (seed and 0xFF) * 0.1f)
             (0.08f + env * wave * 0.24f).coerceIn(0.06f, 0.34f)
         }
     }
 
-    val spatialScratch = remember { FloatArray(barCount) }
     LaunchedEffect(isPlaying, songId) {
         var lastNanos = 0L
         while (true) {
             withFrameNanos { nanos ->
                 val dt = if (lastNanos == 0L) 0f else ((nanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
                 lastNanos = nanos
-                if (isPlaying) phaseTime += dt * 2.1f
+                if (isPlaying) phaseTime += dt * 2.35f
 
                 val liveBands = DesktopSpectrumBus.bands.value
-                // Fluid liquid-silk asymmetric damping (graceful rise, velvet slow decay)
-                val attackRate = 1f - kotlin.math.exp((-9.2f * dt).toDouble()).toFloat()
-                val releaseRate = 1f - kotlin.math.exp((-3.6f * dt).toDouble()).toFloat()
+                // Crisp percussive attack + velvet release for micro-filaments (no destructive blur!)
+                val barAttack = 1f - kotlin.math.exp((-20.0f * dt).toDouble()).toFloat()
+                val barRelease = 1f - kotlin.math.exp((-4.8f * dt).toDouble()).toFloat()
+                // Slower liquid-silk envelope for twin background aurora waves
+                val waveAttack = 1f - kotlin.math.exp((-8.2f * dt).toDouble()).toFloat()
+                val waveRelease = 1f - kotlin.math.exp((-2.6f * dt).toDouble()).toFloat()
 
                 for (i in 0 until barCount) {
                     val u = i.toFloat() / (barCount - 1).coerceAtLeast(1)
                     val target = if (isPlaying) {
                         val raw = liveBands.getOrElse(i) { 0f }
-                        val organicFlow = 0.06f + 0.045f * (0.5f + 0.5f * sin(phaseTime + u * 7.2f))
-                        (raw * 0.88f + organicFlow).coerceIn(0.05f, 1.0f)
+                        // Subtle living breath so quiet passages never freeze dead
+                        val microBreath = 0.045f + 0.035f * (0.5f + 0.5f * sin(phaseTime * 1.15f + u * 9.5f))
+                        // Musical contrast curve: crisp tall peaks + deep breathable valleys
+                        val shaped = Math.pow(raw.toDouble(), 1.18).toFloat()
+                        (shaped * 0.94f + microBreath).coerceIn(0.04f, 1.0f)
                     } else {
-                        restingContour[i] * 0.36f
+                        restingContour[i] * 0.34f
                     }
-                    val cur = animatedLevels[i]
-                    val nextVal = cur + (target - cur) * if (target > cur) attackRate else releaseRate
-                    animatedLevels[i] = nextVal
-                }
-                // 2-pass spatial Gaussian smoothing so adjacent bars glide like silk water instead of jittering
-                repeat(2) {
-                    for (i in 0 until barCount) {
-                        val prev = animatedLevels[(i - 1).coerceAtLeast(0)]
-                        val mid = animatedLevels[i]
-                        val nxt = animatedLevels[(i + 1).coerceAtMost(barCount - 1)]
-                        spatialScratch[i] = prev * 0.22f + mid * 0.56f + nxt * 0.22f
-                    }
-                    System.arraycopy(spatialScratch, 0, animatedLevels, 0, barCount)
-                }
-                for (i in 0 until barCount) {
-                    val nextVal = animatedLevels[i]
 
+                    val cur = animatedLevels[i]
+                    val nextVal = cur + (target - cur) * if (target > cur) barAttack else barRelease
+                    animatedLevels[i] = nextVal
+
+                    val wCur = waveLevels[i]
+                    waveLevels[i] = wCur + (target - wCur) * if (target > wCur) waveAttack else waveRelease
+
+                    // Studio peak-hold stardust physics: brief hang time then smooth gravity fall
                     if (nextVal >= peakDots[i]) {
                         peakDots[i] = nextVal
+                        peakHold[i] = 0.15f
                         peakVel[i] = 0f
+                    } else if (peakHold[i] > 0f) {
+                        peakHold[i] = (peakHold[i] - dt).coerceAtLeast(0f)
                     } else {
-                        peakVel[i] += 1.45f * dt
+                        peakVel[i] += 2.05f * dt
                         peakDots[i] = (peakDots[i] - peakVel[i] * dt).coerceAtLeast(nextVal)
                     }
                 }
@@ -1609,7 +1611,7 @@ fun DesktopLiveSpectrumBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(62.dp)
+                .height(98.dp)
                 .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
                 .pointerInput(durationMs) {
                     detectTapGestures { offset -> onSeekTo(((offset.x / widthPx).coerceIn(0f, 1f) * durationMs).toLong()) }
@@ -1624,11 +1626,18 @@ fun DesktopLiveSpectrumBar(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(modifier = Modifier.fillMaxWidth().height(42.dp)) {
+            Canvas(modifier = Modifier.fillMaxWidth().height(92.dp)) {
                 val _tick = frameTick
                 val totalW = size.width
                 val totalH = size.height
                 val playheadX = (totalW * progress).coerceIn(0f, totalW)
+                val densityPx = density
+
+                // Warm champagne-gold highlight harmonizing with bookbinding cinnabar & dark obsidian
+                val champagneGold = Color(0xFFF3D5A5)
+                val warmRose = Color(0xFFE07A5F)
+                val playedTip = androidx.compose.ui.graphics.lerp(playedColor, champagneGold, 0.56f)
+                val playedMid = androidx.compose.ui.graphics.lerp(playedColor, warmRose, 0.32f)
 
                 fun sampleSmooth(arr: FloatArray, u: Float): Float {
                     val fIdx = (u.coerceIn(0f, 1f) * (arr.size - 1))
@@ -1639,84 +1648,209 @@ fun DesktopLiveSpectrumBar(
                     return arr[i0] + (arr[i1] - arr[i0]) * smoothT
                 }
 
-                // Desktop 16:9 Architectural Horizon Spectrum: ultra-fine 1.2–2.0px hairline micro-bars
-                val densityPx = density
-                val displayBars = (totalW / (5.4f * densityPx)).toInt().coerceIn(96, 210)
+                // Gentle edge framing only at outer 5% so full-width spectrum stays vivid & tall
+                fun edgeFrame(u: Float): Float {
+                    val edge = minOf(u, 1f - u)
+                    return if (edge < 0.05f) 0.38f + (edge / 0.05f) * 0.62f else 1f
+                }
+
+                val displayBars = (totalW / (7.6f * densityPx)).toInt().coerceIn(68, 108)
+                val horizonY = totalH * 0.68f
+                val upperMaxH = (horizonY - 9f * densityPx).coerceAtLeast(16f)
+                val mirrorMaxH = (totalH - horizonY - 2f * densityPx).coerceAtLeast(8f)
 
                 when (spectrumStyle) {
                     DesktopSpectrumStyle.SILK_RIBBON -> {
+                        // === LAYER 1: Twin Translucent Silk Aurora Waves behind micro-filaments ===
+                        val wavePts = 56
+                        val waveStep = totalW / (wavePts - 1).coerceAtLeast(1)
+                        for (wLayer in 0..1) {
+                            val fillPath = Path()
+                            val strokePath = Path()
+                            val phaseShift = if (wLayer == 0) 0f else 1.85f
+                            val freqScale = if (wLayer == 0) 5.2f else 7.4f
+                            val ampMul = if (wLayer == 0) 0.64f else 0.52f
+                            fillPath.moveTo(0f, horizonY)
+                            var px = 0f
+                            var py = horizonY
+                            for (i in 0 until wavePts) {
+                                val x = i * waveStep
+                                val u = i.toFloat() / (wavePts - 1).coerceAtLeast(1)
+                                // Read-only 3-tap smooth sample of waveLevels for ultra-silky aurora ribbon
+                                val s0 = sampleSmooth(waveLevels, (u - 0.03f).coerceIn(0f, 1f))
+                                val s1 = sampleSmooth(waveLevels, u)
+                                val s2 = sampleSmooth(waveLevels, (u + 0.03f).coerceIn(0f, 1f))
+                                val smoothE = (s0 * 0.25f + s1 * 0.50f + s2 * 0.25f)
+                                val undulation = 0.72f + 0.28f * sin(phaseTime * (0.85f + wLayer * 0.35f) + u * freqScale + phaseShift)
+                                val h = (upperMaxH * smoothE * ampMul * undulation * edgeFrame(u)).coerceAtLeast(4f * densityPx)
+                                val y = (horizonY - h).coerceAtLeast(4f)
+                                if (i == 0) {
+                                    fillPath.lineTo(x, y)
+                                    strokePath.moveTo(x, y)
+                                } else {
+                                    val mx = (px + x) * 0.5f
+                                    val my = (py + y) * 0.5f
+                                    fillPath.quadraticTo(px, py, mx, my)
+                                    strokePath.quadraticTo(px, py, mx, my)
+                                }
+                                px = x; py = y
+                            }
+                            fillPath.lineTo(totalW, py)
+                            fillPath.lineTo(totalW, horizonY)
+                            fillPath.close()
+                            strokePath.lineTo(totalW, py)
+
+                            val waveCol = if (wLayer == 0) playedMid else champagneGold
+                            drawPath(
+                                path = fillPath,
+                                brush = Brush.verticalGradient(
+                                    0.0f to waveCol.copy(alpha = if (wLayer == 0) 0.20f else 0.16f),
+                                    0.72f to waveCol.copy(alpha = 0.05f),
+                                    1.0f to Color.Transparent,
+                                    startY = horizonY - upperMaxH * 0.75f,
+                                    endY = horizonY,
+                                ),
+                            )
+                            drawPath(
+                                path = strokePath,
+                                brush = Brush.horizontalGradient(
+                                    0.0f to waveCol.copy(alpha = 0.08f),
+                                    0.20f to waveCol.copy(alpha = if (wLayer == 0) 0.46f else 0.40f),
+                                    0.80f to waveCol.copy(alpha = if (wLayer == 0) 0.38f else 0.34f),
+                                    1.0f to waveCol.copy(alpha = 0.08f),
+                                ),
+                                style = Stroke(width = (1.15f * densityPx), cap = StrokeCap.Round),
+                            )
+                        }
+
+                        // === LAYER 2 & 3 & 4: Full-Width Micro-Filaments + Gravity Stardust + Mirror Reflection ===
                         val step = totalW / displayBars
-                        val barW = (step * 0.34f).coerceIn(1.2f * densityPx, 2.0f * densityPx)
-                        val baseY = totalH - 4f
+                        val barW = (step * 0.32f).coerceIn(1.5f * densityPx, 2.3f * densityPx)
+                        val dotR = (barW * 0.62f).coerceIn(1.1f * densityPx, 1.75f * densityPx)
+
                         for (i in 0 until displayBars) {
                             val u = i.toFloat() / (displayBars - 1).coerceAtLeast(1)
-                            val edgeTaper = sin(u * PI).toFloat().coerceIn(0.22f, 1f)
-                            val level = sampleSmooth(animatedLevels, u) * edgeTaper
+                            val frame = edgeFrame(u)
+                            val level = (sampleSmooth(animatedLevels, u) * frame).coerceIn(0.03f, 1f)
+                            val peakLevel = (sampleSmooth(peakDots, u) * frame).coerceIn(level, 1f)
                             val cx = i * step + step * 0.5f
                             val isPlayed = cx <= playheadX
-                            val barH = if (isPlayed) {
-                                ((totalH - 10f) * level * 0.92f).coerceAtLeast(2.6f)
-                            } else {
-                                ((totalH - 12f) * level * 0.36f).coerceAtLeast(2.0f)
-                            }
-                            val topY = baseY - barH
-                            val col = if (isPlayed) playedColor else unplayedColor
-                            drawRoundRect(
-                                brush = Brush.verticalGradient(
-                                    0.0f to col.copy(alpha = if (isPlayed) 0.92f else 0.42f),
-                                    0.78f to col.copy(alpha = if (isPlayed) 0.44f else 0.16f),
-                                    1.0f to col.copy(alpha = if (isPlayed) 0.15f else 0.06f),
+
+                            // Full expressive height on BOTH played and unplayed sides (never squashed!)
+                            val barH = (upperMaxH * level).coerceAtLeast(2.4f * densityPx)
+                            val topY = horizonY - barH
+
+                            // Upper micro-filament
+                            val barBrush = if (isPlayed) {
+                                Brush.verticalGradient(
+                                    0.0f to playedTip.copy(alpha = 0.96f),
+                                    0.42f to playedMid.copy(alpha = 0.90f),
+                                    0.88f to playedColor.copy(alpha = 0.72f),
+                                    1.0f to playedColor.copy(alpha = 0.45f),
                                     startY = topY,
-                                    endY = baseY,
-                                ),
+                                    endY = horizonY,
+                                )
+                            } else {
+                                Brush.verticalGradient(
+                                    0.0f to unplayedColor.copy(alpha = 0.88f),
+                                    0.55f to unplayedColor.copy(alpha = 0.58f),
+                                    1.0f to unplayedColor.copy(alpha = 0.28f),
+                                    startY = topY,
+                                    endY = horizonY,
+                                )
+                            }
+                            drawRoundRect(
+                                brush = barBrush,
                                 topLeft = Offset(cx - barW * 0.5f, topY),
                                 size = Size(barW, barH),
                                 cornerRadius = CornerRadius(barW * 0.5f, barW * 0.5f),
                             )
-                        }
-                        // Luminous fluid cubic-spline crest ribbon floating silkily across the micro-bars
-                        val crestPath = Path()
-                        var px = 0f; var py = baseY
-                        for (i in 0 until displayBars) {
-                            val u = i.toFloat() / (displayBars - 1).coerceAtLeast(1)
-                            val edgeTaper = sin(u * PI).toFloat().coerceIn(0.22f, 1f)
-                            val level = sampleSmooth(animatedLevels, u) * edgeTaper
-                            val cx = i * step + step * 0.5f
-                            val isPlayed = cx <= playheadX
-                            val barH = if (isPlayed) ((totalH - 10f) * level * 0.92f).coerceAtLeast(2.6f)
-                            else ((totalH - 12f) * level * 0.36f).coerceAtLeast(2.0f)
-                            val cy = (baseY - barH - 2.2f).coerceAtLeast(2f)
-                            if (i == 0) crestPath.moveTo(cx, cy)
-                            else crestPath.quadraticTo(px, py, (px + cx) * 0.5f, (py + cy) * 0.5f)
-                            px = cx; py = cy
-                        }
-                        crestPath.lineTo(px, py)
-                        clipRect(0f, 0f, playheadX, totalH) {
-                            drawPath(crestPath, color = playedColor.copy(alpha = 0.24f), style = Stroke(5.5f, cap = StrokeCap.Round))
-                            drawPath(crestPath, color = playedColor.copy(alpha = 0.94f), style = Stroke(1.8f, cap = StrokeCap.Round))
-                        }
-                        clipRect(playheadX, 0f, totalW, totalH) {
-                            drawPath(crestPath, color = unplayedColor.copy(alpha = 0.55f), style = Stroke(1.2f, cap = StrokeCap.Round))
+
+                            // Lower mirrored reflection beneath the horizon axis
+                            val mirrorH = (barH * 0.44f).coerceAtMost(mirrorMaxH)
+                            val refCol = if (isPlayed) playedMid else unplayedColor
+                            drawRoundRect(
+                                brush = Brush.verticalGradient(
+                                    0.0f to refCol.copy(alpha = if (isPlayed) 0.28f else 0.18f),
+                                    0.65f to refCol.copy(alpha = if (isPlayed) 0.08f else 0.05f),
+                                    1.0f to Color.Transparent,
+                                    startY = horizonY + 1.5f * densityPx,
+                                    endY = horizonY + 1.5f * densityPx + mirrorH,
+                                ),
+                                topLeft = Offset(cx - barW * 0.5f, horizonY + 1.5f * densityPx),
+                                size = Size(barW, mirrorH),
+                                cornerRadius = CornerRadius(barW * 0.5f, barW * 0.5f),
+                            )
+
+                            // Gravity-floating peak-hold stardust micro-bead (above active tall peaks)
+                            if (isPlaying && peakLevel > 0.26f) {
+                                val peakY = (horizonY - upperMaxH * peakLevel - 4.2f * densityPx).coerceAtLeast(2.5f * densityPx)
+                                val starAlpha = ((peakLevel - 0.22f) / 0.78f).coerceIn(0.25f, 0.92f)
+                                val starCol = if (isPlayed) champagneGold else unplayedColor
+                                if (peakLevel > 0.52f) {
+                                    drawCircle(
+                                        color = starCol.copy(alpha = starAlpha * 0.26f),
+                                        radius = dotR * 2.4f,
+                                        center = Offset(cx, peakY),
+                                    )
+                                }
+                                drawCircle(
+                                    color = starCol.copy(alpha = starAlpha),
+                                    radius = dotR,
+                                    center = Offset(cx, peakY),
+                                )
+                            }
                         }
 
-                        // Razor-thin architectural horizon baseline + played progress filament
+                        // === Razor-thin Horizon Axis + Luminous Playhead Jewel ===
                         drawLine(
-                            color = unplayedColor.copy(alpha = 0.28f),
-                            start = Offset(0f, baseY + 1.5f),
-                            end = Offset(totalW, baseY + 1.5f),
-                            strokeWidth = 1.2f,
+                            color = unplayedColor.copy(alpha = 0.24f),
+                            start = Offset(0f, horizonY),
+                            end = Offset(totalW, horizonY),
+                            strokeWidth = 0.9f * densityPx,
                         )
                         drawLine(
-                            color = playedColor.copy(alpha = 0.90f),
-                            start = Offset(0f, baseY + 1.5f),
-                            end = Offset(playheadX, baseY + 1.5f),
-                            strokeWidth = 1.6f,
+                            brush = Brush.horizontalGradient(
+                                0.0f to playedColor.copy(alpha = 0.55f),
+                                0.75f to playedMid.copy(alpha = 0.92f),
+                                1.0f to champagneGold.copy(alpha = 0.98f),
+                                startX = 0f,
+                                endX = playheadX.coerceAtLeast(1f),
+                            ),
+                            start = Offset(0f, horizonY),
+                            end = Offset(playheadX, horizonY),
+                            strokeWidth = 1.4f * densityPx,
+                            cap = StrokeCap.Round,
+                        )
+                        // Playhead jewel glow + core
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    champagneGold.copy(alpha = 0.42f),
+                                    playedMid.copy(alpha = 0.14f),
+                                    Color.Transparent,
+                                ),
+                                center = Offset(playheadX, horizonY),
+                                radius = 10.5f * densityPx,
+                            ),
+                            radius = 10.5f * densityPx,
+                            center = Offset(playheadX, horizonY),
+                        )
+                        drawCircle(
+                            color = champagneGold,
+                            radius = 3.8f * densityPx,
+                            center = Offset(playheadX, horizonY),
+                        )
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.85f),
+                            radius = 1.8f * densityPx,
+                            center = Offset(playheadX, horizonY),
                         )
                     }
 
                     DesktopSpectrumStyle.HARMONIC_STRINGS -> {
                         val midY = totalH * 0.52f
-                        val pts = displayBars.coerceAtMost(120)
+                        val pts = displayBars.coerceAtMost(110)
                         val step = totalW / (pts - 1).coerceAtLeast(1)
                         for (layer in 0..2) {
                             val ampScale = when (layer) { 0 -> 0.44f; 1 -> 0.30f; else -> 0.19f }
@@ -1725,83 +1859,89 @@ fun DesktopLiveSpectrumBar(
                             for (i in 0 until pts) {
                                 val x = i * step
                                 val u = i.toFloat() / (pts - 1).coerceAtLeast(1)
-                                val edgeTap = sin(u * PI).toFloat().coerceAtLeast(0.08f)
-                                val osc = sin(phaseTime * (1.1f + layer * 0.25f) + u * 16f + layer * 1.45f)
+                                val edgeTap = sin(u * PI).toFloat().coerceAtLeast(0.10f)
+                                val osc = sin(phaseTime * (1.15f + layer * 0.28f) + u * 16f + layer * 1.45f)
                                 val y = midY + osc * sampleSmooth(animatedLevels, u) * totalH * ampScale * edgeTap
                                 if (i == 0) path.moveTo(x, y) else path.quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
                                 px = x; py = y
                             }
                             path.lineTo(px, py)
-                            val strokeW = when (layer) { 0 -> 2.3f; 1 -> 1.5f; else -> 1.0f }
-                            val alphaP = when (layer) { 0 -> 0.94f; 1 -> 0.56f; else -> 0.32f }
+                            val strokeW = when (layer) { 0 -> 2.2f * densityPx; 1 -> 1.4f * densityPx; else -> 0.9f * densityPx }
+                            val alphaP = when (layer) { 0 -> 0.94f; 1 -> 0.58f; else -> 0.34f }
                             clipRect(0f, 0f, playheadX, totalH) {
-                                if (layer == 0) drawPath(path, color = playedColor.copy(alpha = 0.20f), style = Stroke(6.5f, cap = StrokeCap.Round))
-                                drawPath(path, color = playedColor.copy(alpha = alphaP), style = Stroke(strokeW, cap = StrokeCap.Round))
+                                if (layer == 0) drawPath(path, color = playedMid.copy(alpha = 0.22f), style = Stroke(6.0f * densityPx, cap = StrokeCap.Round))
+                                drawPath(path, color = if (layer == 0) playedTip.copy(alpha = alphaP) else playedMid.copy(alpha = alphaP), style = Stroke(strokeW, cap = StrokeCap.Round))
                             }
                             clipRect(playheadX, 0f, totalW, totalH) {
                                 drawPath(path, color = unplayedColor.copy(alpha = alphaP * 0.72f), style = Stroke(strokeW * 0.85f, cap = StrokeCap.Round))
                             }
                         }
+                        drawCircle(color = champagneGold, radius = 3.4f * densityPx, center = Offset(playheadX, midY))
                     }
 
                     DesktopSpectrumStyle.DOT_MATRIX -> {
-                        val dotCols = (totalW / (10.5f * densityPx)).toInt().coerceIn(48, 120)
+                        val dotCols = (totalW / (10.2f * densityPx)).toInt().coerceIn(52, 96)
                         val step = totalW / dotCols
-                        val rows = 8
-                        val rowH = (totalH - 6f) / rows
-                        val dotR = (minOf(step, rowH) * 0.30f).coerceIn(1.5f, 2.8f)
-                        val baseY = totalH - 3f
+                        val rows = 10
+                        val rowH = (horizonY - 6f * densityPx) / rows
+                        val dotR = (minOf(step, rowH) * 0.30f).coerceIn(1.5f * densityPx, 2.6f * densityPx)
                         for (i in 0 until dotCols) {
                             val u = i.toFloat() / (dotCols - 1).coerceAtLeast(1)
                             val cx = i * step + step * 0.5f
                             val isPlayed = cx <= playheadX
                             val activeRows = (sampleSmooth(animatedLevels, u) * rows).roundToInt().coerceIn(1, rows)
-                            val col = if (isPlayed) playedColor else unplayedColor
                             for (r in 0 until activeRows) {
-                                val cy = baseY - r * rowH - rowH * 0.5f
-                                drawCircle(col.copy(alpha = 0.45f + 0.55f * (r.toFloat() / rows)), radius = dotR, center = Offset(cx, cy))
+                                val cy = horizonY - r * rowH - rowH * 0.5f
+                                val frac = r.toFloat() / rows
+                                val col = if (isPlayed) androidx.compose.ui.graphics.lerp(playedColor, champagneGold, frac * 0.65f) else unplayedColor
+                                drawCircle(col.copy(alpha = 0.38f + 0.60f * frac), radius = dotR, center = Offset(cx, cy))
                             }
                             val peakRow = (sampleSmooth(peakDots, u) * (rows - 1)).coerceIn(0f, (rows - 1).toFloat())
-                            val peakY = baseY - peakRow * rowH - rowH * 0.5f
-                            drawCircle(if (isPlayed) accentColor else unplayedColor.copy(alpha = 0.85f), radius = dotR * 1.18f, center = Offset(cx, peakY))
+                            val peakY = horizonY - peakRow * rowH - rowH * 0.5f
+                            drawCircle(if (isPlayed) champagneGold else unplayedColor.copy(alpha = 0.85f), radius = dotR * 1.15f, center = Offset(cx, peakY))
                         }
+                        drawLine(color = unplayedColor.copy(alpha = 0.22f), start = Offset(0f, horizonY), end = Offset(totalW, horizonY), strokeWidth = 0.9f * densityPx)
+                        drawLine(color = playedMid.copy(alpha = 0.90f), start = Offset(0f, horizonY), end = Offset(playheadX, horizonY), strokeWidth = 1.3f * densityPx)
+                        drawCircle(color = champagneGold, radius = 3.5f * densityPx, center = Offset(playheadX, horizonY))
                     }
 
                     DesktopSpectrumStyle.INK_MOUNTAIN -> {
-                        val baseY = totalH - 2f
-                        val pts = displayBars.coerceAtMost(120)
+                        val pts = displayBars.coerceAtMost(110)
                         val step = totalW / (pts - 1).coerceAtLeast(1)
                         val backPath = Path().apply {
-                            moveTo(0f, baseY)
-                            var px = 0f; var py = baseY
+                            moveTo(0f, horizonY)
+                            var px = 0f; var py = horizonY
                             for (i in 0 until pts) {
                                 val x = i * step
                                 val u = ((i.toFloat() / (pts - 1).coerceAtLeast(1)) + 0.08f) % 1f
-                                val y = baseY - (totalH - 10f) * (sampleSmooth(animatedLevels, u) * 0.72f + 0.08f)
+                                val y = horizonY - upperMaxH * (sampleSmooth(waveLevels, u) * 0.72f + 0.06f)
                                 if (i == 0) lineTo(x, y) else quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
                                 px = x; py = y
                             }
-                            lineTo(totalW, baseY); close()
+                            lineTo(totalW, horizonY); close()
                         }
-                        drawPath(backPath, Brush.verticalGradient(0.0f to unplayedColor.copy(alpha = 0.36f), 1.0f to Color.Transparent))
+                        drawPath(backPath, Brush.verticalGradient(0.0f to unplayedColor.copy(alpha = 0.32f), 1.0f to Color.Transparent, startY = 0f, endY = horizonY))
                         val frontPath = Path().apply {
-                            moveTo(0f, baseY)
-                            var px = 0f; var py = baseY
+                            moveTo(0f, horizonY)
+                            var px = 0f; var py = horizonY
                             for (i in 0 until pts) {
                                 val x = i * step
                                 val u = i.toFloat() / (pts - 1).coerceAtLeast(1)
-                                val y = baseY - (totalH - 6f) * (sampleSmooth(animatedLevels, u) * 0.94f + 0.05f)
+                                val y = horizonY - upperMaxH * (sampleSmooth(animatedLevels, u) * 0.94f + 0.04f)
                                 if (i == 0) lineTo(x, y) else quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
                                 px = x; py = y
                             }
-                            lineTo(totalW, baseY); close()
+                            lineTo(totalW, horizonY); close()
                         }
-                        clipRect(0f, 0f, playheadX, totalH) {
-                            drawPath(frontPath, Brush.verticalGradient(0.0f to playedColor.copy(alpha = 0.72f), 0.85f to playedColor.copy(alpha = 0.16f), 1.0f to Color.Transparent))
+                        clipRect(0f, 0f, playheadX, horizonY) {
+                            drawPath(frontPath, Brush.verticalGradient(0.0f to playedTip.copy(alpha = 0.78f), 0.75f to playedColor.copy(alpha = 0.24f), 1.0f to Color.Transparent, startY = 0f, endY = horizonY))
                         }
-                        clipRect(playheadX, 0f, totalW, totalH) {
-                            drawPath(frontPath, Brush.verticalGradient(0.0f to unplayedColor.copy(alpha = 0.45f), 1.0f to Color.Transparent))
+                        clipRect(playheadX, 0f, totalW, horizonY) {
+                            drawPath(frontPath, Brush.verticalGradient(0.0f to unplayedColor.copy(alpha = 0.48f), 1.0f to Color.Transparent, startY = 0f, endY = horizonY))
                         }
+                        drawLine(color = unplayedColor.copy(alpha = 0.24f), start = Offset(0f, horizonY), end = Offset(totalW, horizonY), strokeWidth = 0.9f * densityPx)
+                        drawLine(color = playedMid.copy(alpha = 0.92f), start = Offset(0f, horizonY), end = Offset(playheadX, horizonY), strokeWidth = 1.4f * densityPx)
+                        drawCircle(color = champagneGold, radius = 3.6f * densityPx, center = Offset(playheadX, horizonY))
                     }
                 }
             }

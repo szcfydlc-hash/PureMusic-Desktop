@@ -82,6 +82,7 @@ import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.Pause
@@ -237,6 +238,7 @@ fun main() = application {
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var renamingPlaylist by remember { mutableStateOf<DesktopPlaylist?>(null) }
     var addingSongToPlaylist by remember { mutableStateOf<DesktopSong?>(null) }
+    var inspectingSongInfo by remember { mutableStateOf<DesktopSong?>(null) }
 
     val scope = rememberCoroutineScope()
 
@@ -264,6 +266,30 @@ fun main() = application {
     }
 
     lateinit var engine: DesktopAudioEngine
+
+    fun playNextInQueue(song: DesktopSong) {
+        if (activeQueue.isEmpty() || currentIndex !in activeQueue.indices) {
+            playFromQueue(listOf(song), 0)
+            return
+        }
+        val mutable = activeQueue.toMutableList()
+        val insertPos = (currentIndex + 1).coerceIn(0, mutable.size)
+        mutable.add(insertPos, song)
+        activeQueue = mutable
+    }
+
+    fun openSongInExplorer(filePath: String) {
+        runCatching {
+            val f = File(filePath)
+            if (!f.exists()) return
+            val os = System.getProperty("os.name").lowercase()
+            if (os.contains("win")) {
+                ProcessBuilder("explorer.exe", "/select,", f.absolutePath).start()
+            } else if (java.awt.Desktop.isDesktopSupported()) {
+                java.awt.Desktop.getDesktop().open(f.parentFile ?: f)
+            }
+        }
+    }
 
     fun playFromQueue(queue: List<DesktopSong>, index: Int) {
         if (queue.isEmpty() || index !in queue.indices) return
@@ -647,10 +673,13 @@ fun main() = application {
     ) {
         val baseDensity = LocalDensity.current
         val winScale = if (config.autoWindowScale) {
-            minOf(mainWindowState.size.width.value / 1280f, mainWindowState.size.height.value / 760f).coerceIn(0.78f, 1.42f)
+            minOf(mainWindowState.size.width.value / 1280f, mainWindowState.size.height.value / 760f).coerceIn(0.85f, 1.28f)
         } else 1.0f
         CompositionLocalProvider(
-            LocalDensity provides Density(baseDensity.density, fontScale = (baseDensity.fontScale * scale * winScale).coerceIn(0.75f, 1.65f)),
+            LocalDensity provides Density(
+                density = (baseDensity.density * winScale).coerceIn(0.80f, 3.2f),
+                fontScale = (baseDensity.fontScale * scale).coerceIn(0.84f, 1.24f),
+            ),
             LocalLyricFontFamily provides lyricFont,
             LocalLyricSlantDegrees provides config.lyricSlantDegrees,
         ) {
@@ -1015,6 +1044,9 @@ fun main() = application {
                                         }
                                     },
                                     onAddToPlaylist = { addingSongToPlaylist = it },
+                                    onPlayNext = { playNextInQueue(it) },
+                                    onShowInfo = { inspectingSongInfo = it },
+                                    onOpenFolder = { openSongInExplorer(it.filePath) },
                                 )
                             } else {
                                 when (currentTab) {
@@ -1039,6 +1071,9 @@ fun main() = application {
                                             }
                                         },
                                         onAddToPlaylist = { addingSongToPlaylist = it },
+                                        onPlayNext = { playNextInQueue(it) },
+                                        onShowInfo = { inspectingSongInfo = it },
+                                        onOpenFolder = { openSongInExplorer(it.filePath) },
                                         onSelectArtist = { activeDetail = DesktopDetailView.ArtistView(it) },
                                         onSelectFolder = { activeDetail = DesktopDetailView.FolderView(it) },
                                         onPickFolder = { pickAndAddFolder() },
@@ -1521,6 +1556,45 @@ fun main() = application {
                     confirmButton = { TextButton(onClick = { addingSongToPlaylist = null }) { Text("完成") } },
                 )
             }
+
+            inspectingSongInfo?.let { infoSong ->
+                AlertDialog(
+                    onDismissRequest = { inspectingSongInfo = null },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            DesktopAlbumCover(filePath = infoSong.filePath, modifier = Modifier.size(48.dp), cornerRadius = 8.dp, iconSize = 20.dp)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(infoSong.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${infoSong.artist} · ${infoSong.album}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("流派：${infoSong.genre}", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurface)
+                            Text("音质：${if (infoSong.isHiRes) "Hi-Res · " else ""}${infoSong.formatLabel}  |  时长：${formatDuration(infoSong.durationMs)}", fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurface)
+                            Text("路径：${infoSong.filePath}", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                TextButton(onClick = { openSongInExplorer(infoSong.filePath) }) {
+                                    Text("打开文件位置", fontSize = 12.5.sp)
+                                }
+                                TextButton(onClick = {
+                                    inspectingSongInfo = null
+                                    addingSongToPlaylist = infoSong
+                                }) {
+                                    Text("添加到歌单", fontSize = 12.5.sp)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { inspectingSongInfo = null }) { Text("关闭") }
+                    },
+                )
+            }
         }
         }
     }
@@ -1952,6 +2026,9 @@ private fun DesktopLibraryPage(
     onPlayAt: (Int) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onAddToPlaylist: (DesktopSong) -> Unit,
+    onPlayNext: (DesktopSong) -> Unit = {},
+    onShowInfo: (DesktopSong) -> Unit = {},
+    onOpenFolder: (DesktopSong) -> Unit = {},
     onSelectArtist: (DesktopArtist) -> Unit,
     onSelectFolder: (DesktopFolder) -> Unit,
     onPickFolder: () -> Unit,
@@ -2191,7 +2268,7 @@ private fun DesktopLibraryPage(
                                 Text("歌手", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f), modifier = Modifier.weight(0.75f))
                                 Text("专辑", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f), modifier = Modifier.weight(0.85f))
                                 Text("音质", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f), modifier = Modifier.width(72.dp))
-                                Text("时长", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f), textAlign = TextAlign.End, modifier = Modifier.width(78.dp))
+                                Text("时长 · 操作", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f), textAlign = TextAlign.End, modifier = Modifier.width(122.dp))
                             }
                             HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f))
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -2211,6 +2288,9 @@ private fun DesktopLibraryPage(
                                         onClick = { onPlayAt(idx) },
                                         onToggleFavorite = { onToggleFavorite(song.filePath) },
                                         onAddToPlaylist = { onAddToPlaylist(song) },
+                                        onPlayNext = { onPlayNext(song) },
+                                        onShowInfo = { onShowInfo(song) },
+                                        onOpenFolder = { onOpenFolder(song) },
                                     )
                                 }
                             }
@@ -2330,7 +2410,11 @@ private fun BookTrackRow(
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onAddToPlaylist: () -> Unit,
+    onPlayNext: () -> Unit = {},
+    onShowInfo: () -> Unit = {},
+    onOpenFolder: () -> Unit = {},
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
     val hoverSrc = remember { MutableInteractionSource() }
     val hovered by hoverSrc.collectIsHoveredAsState()
     val rowShape = RoundedCornerShape(10.dp)
@@ -2404,32 +2488,105 @@ private fun BookTrackRow(
             }
         }
         Row(
-            modifier = Modifier.width(78.dp),
+            modifier = Modifier.width(122.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.End,
         ) {
-            if (hovered || isFavorite) {
-                IconButton(onClick = onToggleFavorite, modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand)) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                        contentDescription = "收藏",
-                        tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp),
-                    )
-                }
-            }
-            if (hovered) {
-                IconButton(onClick = onAddToPlaylist, modifier = Modifier.size(24.dp).pointerHoverIcon(PointerIcon.Hand)) {
-                    Icon(Icons.Rounded.Add, contentDescription = "加入歌单", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
-                }
-            }
-            Spacer(modifier = Modifier.width(4.dp))
             Text(
                 text = formatDuration(song.durationMs),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.End,
             )
+            Spacer(modifier = Modifier.width(10.dp))
+            IconButton(
+                onClick = onToggleFavorite,
+                modifier = Modifier.size(26.dp).pointerHoverIcon(PointerIcon.Hand),
+            ) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    contentDescription = if (isFavorite) "取消喜欢" else "添加到我喜欢",
+                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (hovered) 0.90f else 0.55f),
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.size(26.dp).pointerHoverIcon(PointerIcon.Hand),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "更多操作",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (hovered || menuExpanded) 0.95f else 0.62f),
+                        modifier = Modifier.size(15.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    modifier = Modifier
+                        .background(MaterialTheme.colorScheme.surface)
+                        .border(0.7.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f), RoundedCornerShape(10.dp)),
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(if (isFavorite) "取消喜欢" else "添加到我喜欢", fontSize = 13.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = null,
+                                tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onToggleFavorite()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("添加到歌单", fontSize = 13.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.PlaylistAdd, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onAddToPlaylist()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("下一首播放", fontSize = 13.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.QueueMusic, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onPlayNext()
+                        },
+                    )
+                    HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                    DropdownMenuItem(
+                        text = { Text("歌曲信息", fontSize = 13.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onShowInfo()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("打开文件所在位置", fontSize = 13.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onOpenFolder()
+                        },
+                    )
+                }
+            }
         }
     }
 }
@@ -3997,6 +4154,9 @@ private fun DesktopCollectionDetailPage(
     onPlayAt: (Int) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onAddToPlaylist: (DesktopSong) -> Unit,
+    onPlayNext: (DesktopSong) -> Unit = {},
+    onShowInfo: (DesktopSong) -> Unit = {},
+    onOpenFolder: (DesktopSong) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -4037,6 +4197,9 @@ private fun DesktopCollectionDetailPage(
                             onClick = { onPlayAt(idx) },
                             onToggleFavorite = { onToggleFavorite(song.filePath) },
                             onAddToPlaylist = { onAddToPlaylist(song) },
+                            onPlayNext = { onPlayNext(song) },
+                            onShowInfo = { onShowInfo(song) },
+                            onOpenFolder = { onOpenFolder(song) },
                         )
                     }
                 }

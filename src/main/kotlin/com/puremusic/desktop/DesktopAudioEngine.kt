@@ -146,11 +146,12 @@ object DesktopFfmpegLocator {
 }
 
 /**
- * True 256-point Radix-2 Cooley-Tukey FFT spectrum engine with soft-knee tanh dB scaling.
+ * True 512-point Radix-2 Cooley-Tukey perceptual logarithmic FFT spectrum engine (64 bands)
+ * with adaptive AGC, crisp transient attack, and natural low-to-high stereo musicality.
  */
 object DesktopSpectrumBus {
-    const val BAND_COUNT = 48
-    private const val FFT_SIZE = 256
+    const val BAND_COUNT = 64
+    private const val FFT_SIZE = 512
 
     private val _bands = MutableStateFlow(FloatArray(BAND_COUNT))
     val bands: StateFlow<FloatArray> = _bands.asStateFlow()
@@ -171,7 +172,7 @@ object DesktopSpectrumBus {
         0.5 * (1.0 - cos(2.0 * PI * i / (FFT_SIZE - 1)))
     }
 
-    private var runningFloorDb = -52.0
+    private var runningFloorDb = -54.0
     private var runningCeilDb = -14.0
     private var runningBassAvg = 0.08f
     private var smoothedBeat = 0f
@@ -179,7 +180,7 @@ object DesktopSpectrumBus {
 
     fun resetToIdle() {
         smoothed.fill(0f)
-        runningFloorDb = -52.0
+        runningFloorDb = -54.0
         runningCeilDb = -14.0
         runningBassAvg = 0.08f
         smoothedBeat = 0f
@@ -228,65 +229,67 @@ object DesktopSpectrumBus {
         val rmsR = sqrt(sumSqR / FFT_SIZE).toFloat()
         val vuTargetL = tanh((rmsL * 3.8).toDouble()).toFloat().coerceIn(0f, 1f)
         val vuTargetR = tanh((rmsR * 3.8).toDouble()).toFloat().coerceIn(0f, 1f)
-        smoothVuL = if (vuTargetL > smoothVuL) smoothVuL + (vuTargetL - smoothVuL) * 0.45f else smoothVuL * 0.86f
-        smoothVuR = if (vuTargetR > smoothVuR) smoothVuR + (vuTargetR - smoothVuR) * 0.45f else smoothVuR * 0.86f
+        smoothVuL = if (vuTargetL > smoothVuL) smoothVuL + (vuTargetL - smoothVuL) * 0.48f else smoothVuL * 0.85f
+        smoothVuR = if (vuTargetR > smoothVuR) smoothVuR + (vuTargetR - smoothVuR) * 0.48f else smoothVuR * 0.85f
         _stereoVu.value = smoothVuL to smoothVuR
 
         fftRadix2(real, imag)
 
-        val halfBands = BAND_COUNT / 2
+        // True 64-band perceptual logarithmic mapping (sub-bass -> vocals -> air/sparkle)
         val maxBin = FFT_SIZE / 2 - 1
-        val rawDb = DoubleArray(halfBands)
-        var frameMaxDb = -70.0
+        val rawDb = DoubleArray(BAND_COUNT)
+        var frameMaxDb = -72.0
         var bassLinear = 0f
 
-        for (b in 0 until halfBands) {
-            val t0 = b.toDouble() / halfBands
-            val t1 = (b + 1).toDouble() / halfBands
-            val binStart = (1.0 + t0.pow(1.85) * (maxBin - 1)).toInt().coerceIn(1, maxBin)
-            val binEnd = (1.0 + t1.pow(1.85) * (maxBin - 1)).toInt().coerceIn(binStart, maxBin)
-            var energy = 0.0
+        for (b in 0 until BAND_COUNT) {
+            val t0 = b.toDouble() / BAND_COUNT
+            val t1 = (b + 1).toDouble() / BAND_COUNT
+            val binStart = (1.0 + t0.pow(1.92) * (maxBin - 1)).toInt().coerceIn(1, maxBin)
+            val binEnd = (1.0 + t1.pow(1.92) * (maxBin - 1)).toInt().coerceIn(binStart, maxBin)
+            var peakMag = 0.0
+            var avgMag = 0.0
+            var count = 0
             for (k in binStart..binEnd) {
                 val mag = sqrt(real[k] * real[k] + imag[k] * imag[k]) / (FFT_SIZE / 2.0)
-                if (mag > energy) energy = mag
+                if (mag > peakMag) peakMag = mag
+                avgMag += mag
+                count++
             }
-            val lifted = energy * (1.0 + t0 * 1.45)
+            val energy = peakMag * 0.68 + (avgMag / count.coerceAtLeast(1)) * 0.32
+            // Gentle perceptual tilt so mids & shimmering highs dance vividly alongside bass
+            val lifted = energy * (1.0 + t0 * 1.75)
             val db = 20.0 * log10(lifted.coerceAtLeast(1e-5))
             rawDb[b] = db
             if (db > frameMaxDb) frameMaxDb = db
-            if (b < 4) bassLinear += lifted.toFloat()
+            if (b < 8) bassLinear += lifted.toFloat()
         }
 
-        val bassNow = bassLinear / 4f
-        runningBassAvg = runningBassAvg * 0.90f + bassNow * 0.10f
-        val rawBeat = ((bassNow - runningBassAvg * 0.80f) / runningBassAvg.coerceAtLeast(0.01f)).coerceIn(0f, 1.4f)
+        val bassNow = bassLinear / 8f
+        runningBassAvg = runningBassAvg * 0.88f + bassNow * 0.12f
+        val rawBeat = ((bassNow - runningBassAvg * 0.78f) / runningBassAvg.coerceAtLeast(0.008f)).coerceIn(0f, 1.5f)
         smoothedBeat = if (rawBeat > smoothedBeat) {
-            smoothedBeat + (rawBeat - smoothedBeat) * 0.68f
+            smoothedBeat + (rawBeat - smoothedBeat) * 0.72f
         } else {
-            smoothedBeat * 0.84f
+            smoothedBeat * 0.82f
         }
         _beatEnergy.value = smoothedBeat.coerceIn(0f, 1f)
 
         runningCeilDb = if (frameMaxDb > runningCeilDb) {
-            runningCeilDb + (frameMaxDb - runningCeilDb) * 0.25
+            runningCeilDb + (frameMaxDb - runningCeilDb) * 0.28
         } else {
-            (runningCeilDb - 0.18).coerceAtLeast(-26.0)
+            (runningCeilDb - 0.16).coerceAtLeast(-28.0)
         }
-        val floorDb = (runningCeilDb - 42.0).coerceAtLeast(-66.0)
-        runningFloorDb = runningFloorDb * 0.92 + floorDb * 0.08
-        val span = (runningCeilDb - runningFloorDb).coerceAtLeast(18.0)
+        val floorDb = (runningCeilDb - 40.0).coerceAtLeast(-66.0)
+        runningFloorDb = runningFloorDb * 0.90 + floorDb * 0.10
+        val span = (runningCeilDb - runningFloorDb).coerceAtLeast(16.0)
 
-        val normHalf = FloatArray(halfBands) { b ->
-            val linear = ((rawDb[b] - runningFloorDb) / span).coerceIn(0.0, 1.35)
-            tanh(linear * 1.35).toFloat().coerceIn(0f, 1f)
-        }
-
-        val rawFull = FloatArray(BAND_COUNT)
-        for (i in 0 until BAND_COUNT) {
-            val distFromCenter = abs(i - (BAND_COUNT - 1) / 2f) / ((BAND_COUNT - 1) / 2f)
-            val binIdx = (distFromCenter * (halfBands - 1)).toInt().coerceIn(0, halfBands - 1)
-            val beatBoost = (1f - distFromCenter * 0.58f) * smoothedBeat * 0.22f
-            rawFull[i] = (normHalf[binIdx] * 0.92f + beatBoost).coerceIn(0f, 1f)
+        val rawFull = FloatArray(BAND_COUNT) { b ->
+            val u = b.toFloat() / (BAND_COUNT - 1)
+            val linear = ((rawDb[b] - runningFloorDb) / span).coerceIn(0.0, 1.38)
+            val curved = tanh(linear * 1.42).toFloat().coerceIn(0f, 1f)
+            // Subtle organic beat lift on low-mid percussion region without flattening highs
+            val beatWeight = (1f - abs(u - 0.22f) * 1.8f).coerceIn(0f, 1f)
+            (curved * 0.94f + beatWeight * smoothedBeat * 0.18f).coerceIn(0f, 1f)
         }
 
         val next = FloatArray(BAND_COUNT)
@@ -294,12 +297,12 @@ object DesktopSpectrumBus {
             val m1 = rawFull[(i - 1).coerceAtLeast(0)]
             val c0 = rawFull[i]
             val p1 = rawFull[(i + 1).coerceAtMost(BAND_COUNT - 1)]
-            val target = m1 * 0.22f + c0 * 0.56f + p1 * 0.22f
+            val target = m1 * 0.12f + c0 * 0.76f + p1 * 0.12f
             val prev = smoothed[i]
             val updated = if (target > prev) {
-                prev + (target - prev) * 0.62f
+                prev + (target - prev) * 0.78f
             } else {
-                prev * 0.86f + target * 0.14f
+                prev * 0.76f + target * 0.24f
             }
             smoothed[i] = updated.coerceIn(0f, 1f)
             next[i] = smoothed[i]
