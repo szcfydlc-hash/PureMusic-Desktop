@@ -1679,7 +1679,7 @@ fun DesktopLiveSpectrumBar(
             val u = i.toFloat() / (barCount - 1)
             val env = sin(u * PI).toFloat().coerceAtLeast(0.22f)
             val wave = 0.5f + 0.5f * sin(i * 0.42f + (seed and 0xFF) * 0.1f)
-            (0.08f + env * wave * 0.24f).coerceIn(0.06f, 0.34f)
+            (0.14f + env * wave * 0.56f).coerceIn(0.10f, 0.72f)
         }
     }
 
@@ -1709,7 +1709,7 @@ fun DesktopLiveSpectrumBar(
                         val shaped = Math.pow(raw.toDouble(), 1.18).toFloat()
                         (shaped * 0.94f + microBreath).coerceIn(0.04f, 1.0f)
                     } else {
-                        restingContour[i] * 0.34f
+                        restingContour[i] * 0.72f
                     }
 
                     val cur = animatedLevels[i]
