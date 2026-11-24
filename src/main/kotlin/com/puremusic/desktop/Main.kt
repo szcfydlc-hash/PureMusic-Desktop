@@ -24,6 +24,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -2456,7 +2458,6 @@ private fun BookTrackRow(
     onOpenFolder: () -> Unit = {},
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    var customizerOpen by remember { mutableStateOf(false) }
     val hoverSrc = remember { MutableInteractionSource() }
     val hovered by hoverSrc.collectIsHoveredAsState()
     val rowShape = RoundedCornerShape(10.dp)
@@ -4385,6 +4386,7 @@ private fun UnifiedImmersiveStage(
     val activeAccent = if (isDarkScene) lerp(Color(0xFFE8C88E), animatedGlow, 0.44f) else accentColor
 
     var menuExpanded by remember { mutableStateOf(false) }
+    var customizerOpen by remember { mutableStateOf(false) }
     var lastPointerMoveMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var chromeVisible by remember { mutableStateOf(true) }
 
@@ -4567,7 +4569,7 @@ private fun UnifiedImmersiveStage(
                                 value = ((coverScale - 0.80f) / 0.45f).coerceIn(0f, 1f),
                                 onValueChange = { onUpdateCoverScale(0.80f + it * 0.45f) },
                                 activeColor = activeAccent,
-                                inactiveColor = popMuted.copy(alpha = 0.25f),
+                                trackColor = popMuted.copy(alpha = 0.25f),
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             Spacer(modifier = Modifier.height(8.dp))
@@ -4577,7 +4579,7 @@ private fun UnifiedImmersiveStage(
                                 value = ((lyricFontScale - 0.75f) / 0.70f).coerceIn(0f, 1f),
                                 onValueChange = { target -> onAdjustLyricScale((0.75f + target * 0.70f) - lyricFontScale) },
                                 activeColor = activeAccent,
-                                inactiveColor = popMuted.copy(alpha = 0.25f),
+                                trackColor = popMuted.copy(alpha = 0.25f),
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             Spacer(modifier = Modifier.height(8.dp))
@@ -4587,7 +4589,7 @@ private fun UnifiedImmersiveStage(
                                 value = moodStrength.coerceIn(0f, 1f),
                                 onValueChange = onUpdateMoodStrength,
                                 activeColor = activeAccent,
-                                inactiveColor = popMuted.copy(alpha = 0.25f),
+                                trackColor = popMuted.copy(alpha = 0.25f),
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             Spacer(modifier = Modifier.height(10.dp))

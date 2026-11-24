@@ -25,6 +25,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.BoxWithConstraints
