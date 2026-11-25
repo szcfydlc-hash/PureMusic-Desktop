@@ -1449,8 +1449,7 @@ fun DesktopVintageReceiverDeck(
                         .border(1.dp, Color.White.copy(alpha = 0.42f), RoundedCornerShape(3.dp)),
                 ) {
                     // Procedural brushed aluminum hairlines + horizontal seam line
-                    val stringPaths = remember { Array(3) { Path() } }
-                Canvas(modifier = Modifier.fillMaxSize()) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
                         for (i in 0..46) {
                             val y = size.height * (i / 46f)
                             drawLine(Color.White.copy(alpha = if (i % 4 == 0) 0.09f else 0.03f), Offset(0f, y), Offset(size.width, y), strokeWidth = 0.7f)
@@ -1805,6 +1804,7 @@ fun DesktopLiveSpectrumBar(
                 },
             contentAlignment = Alignment.Center,
         ) {
+            val stringPaths = remember { Array(3) { Path() } }
             Canvas(modifier = Modifier.fillMaxWidth().height(stageHeightDp)) {
                 val _tick = frameTick
                 val totalW = size.width
@@ -2936,7 +2936,7 @@ fun rememberDesktopSmoothPlaybackClock(
 }
 
 private val DESKTOP_CREDIT_REGEX = Regex(
-    "^\s*(作词|作曲|编曲|词|曲|混音|母带|制作人|制作|监制|出品|发行|录音|和声|吉他|贝斯|鼓|弦乐|钢琴|键盘|演唱|原唱|翻唱|统筹|企划|文案|封面|视觉|OP|SP|Lyricist|Composer|Arranger|Producer|Mixed\s*by|Mastered\s*by|Written\s*by|Vocal|Guitar|Bass|Drums)\s*[:：\-—]",
+    """^\s*(作词|作曲|编曲|词|曲|混音|母带|制作人|制作|监制|出品|发行|录音|和声|吉他|贝斯|鼓|弦乐|钢琴|键盘|演唱|原唱|翻唱|统筹|企划|文案|封面|视觉|OP|SP|Lyricist|Composer|Arranger|Producer|Mixed\s*by|Mastered\s*by|Written\s*by|Vocal|Guitar|Bass|Drums)\s*[:：\-—]""",
     RegexOption.IGNORE_CASE,
 )
 
