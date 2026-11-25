@@ -118,6 +118,8 @@ enum class DesktopSpectrumStyle(val label: String) {
     HARMONIC_STRINGS("极简弦波"),
     DOT_MATRIX("点阵峰标"),
     INK_MOUNTAIN("水墨声山"),
+    STUDIO_VU_SCALE("游标声尺"),
+    ACOUSTIC_RIPPLE("静水声纹"),
 }
 
 enum class DesktopAccentColor(val label: String, val shortLabel: String, val hex: Long) {
@@ -127,6 +129,8 @@ enum class DesktopAccentColor(val label: String, val shortLabel: String, val hex
     WALNUT("胡桃棕", "胡桃", 0xFF7A5638),
     OCHRE_GOLD("赭石金", "赭金", 0xFF9A7230),
     PURE_INK("纯墨黑", "纯墨", 0xFF262320),
+    NORDIC_MIST("雾霭冰瓷蓝", "冰瓷", 0xFF4F728A),
+    TWILIGHT_PLUM("暮色酒韵紫", "酒韵", 0xFF7A4052),
 }
 
 enum class DesktopLayoutDensity(

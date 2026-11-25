@@ -123,12 +123,14 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.text.TextLayoutResult
 import org.jetbrains.skia.Image as SkiaImage
+import org.jetbrains.skia.Rect as SkiaRect
+import org.jetbrains.skia.Surface as SkiaSurface
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -138,12 +140,13 @@ object ArtworkMemoryCache {
     var revision by mutableIntStateOf(0)
         private set
 
-    private val map = object : LinkedHashMap<String, ImageBitmap?>(96, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap?>?): Boolean = size > 140
+    private val map = object : LinkedHashMap<String, ImageBitmap?>(160, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap?>?): Boolean = size > 240
     }
     private val colorMap = object : LinkedHashMap<String, Color>(96, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Color>?): Boolean = size > 140
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Color>?): Boolean = size > 180
     }
+    private val inFlight = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<ImageBitmap?>>()
 
     @Synchronized fun get(key: String): ImageBitmap? = map[key]
     @Synchronized fun contains(key: String): Boolean = map.containsKey(key)
@@ -155,35 +158,78 @@ object ArtworkMemoryCache {
     fun invalidate(key: String) {
         synchronized(this) {
             map.remove(key)
+            map.remove("$key@160")
+            map.remove("$key@720")
             colorMap.remove(key)
         }
         revision++
     }
+
+    suspend fun getOrDecode(filePath: String, maxDimPx: Int): ImageBitmap? {
+        val bucket = if (maxDimPx <= 220) 160 else 720
+        val cacheKey = "$filePath@$bucket"
+        if (contains(cacheKey)) return get(cacheKey)
+
+        val newDeferred = kotlinx.coroutines.CompletableDeferred<ImageBitmap?>()
+        val existing = inFlight.putIfAbsent(cacheKey, newDeferred)
+        if (existing != null) {
+            return runCatching { existing.await() }.getOrNull()
+        }
+
+        val loaded = try {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = DesktopLibraryScanner.loadArtwork(filePath) ?: return@runCatching null
+                    val raw = SkiaImage.makeFromEncoded(bytes)
+                    val srcW = raw.width
+                    val srcH = raw.height
+                    val maxSide = maxOf(srcW, srcH)
+                    if (maxSide > bucket && srcW > 0 && srcH > 0) {
+                        val scale = bucket.toFloat() / maxSide.toFloat()
+                        val tw = (srcW * scale).roundToInt().coerceAtLeast(1)
+                        val th = (srcH * scale).roundToInt().coerceAtLeast(1)
+                        val surface = SkiaSurface.makeRasterN32Premul(tw, th)
+                        surface.canvas.drawImageRect(raw, SkiaRect.makeWH(tw.toFloat(), th.toFloat()))
+                        val snap = surface.makeImageSnapshot()
+                        raw.close()
+                        val res = snap.toComposeImageBitmap()
+                        snap.close()
+                        surface.close()
+                        res
+                    } else {
+                        val res = raw.toComposeImageBitmap()
+                        raw.close()
+                        res
+                    }
+                }.getOrNull()
+            }
+        } finally {
+            inFlight.remove(cacheKey)
+        }
+        put(cacheKey, loaded)
+        newDeferred.complete(loaded)
+        return loaded
+    }
 }
 
 @Composable
-fun rememberSongArtwork(filePath: String?): ImageBitmap? {
+fun rememberSongArtwork(filePath: String?, targetSizePx: Int = 720): ImageBitmap? {
     val rev = ArtworkMemoryCache.revision
-    var bitmap by remember(filePath, rev) {
-        mutableStateOf(if (filePath != null && ArtworkMemoryCache.contains(filePath)) ArtworkMemoryCache.get(filePath) else null)
+    val bucket = if (targetSizePx <= 220) 160 else 720
+    val cacheKey = if (filePath != null) "$filePath@$bucket" else null
+    var bitmap by remember(cacheKey, rev) {
+        mutableStateOf(if (cacheKey != null && ArtworkMemoryCache.contains(cacheKey)) ArtworkMemoryCache.get(cacheKey) else null)
     }
-    LaunchedEffect(filePath, rev) {
+    LaunchedEffect(cacheKey, rev) {
         if (filePath == null) {
             bitmap = null
             return@LaunchedEffect
         }
-        if (ArtworkMemoryCache.contains(filePath)) {
-            bitmap = ArtworkMemoryCache.get(filePath)
+        if (cacheKey != null && ArtworkMemoryCache.contains(cacheKey)) {
+            bitmap = ArtworkMemoryCache.get(cacheKey)
             return@LaunchedEffect
         }
-        val loaded = withContext(Dispatchers.IO) {
-            runCatching {
-                val bytes = DesktopLibraryScanner.loadArtwork(filePath) ?: return@runCatching null
-                SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap()
-            }.getOrNull()
-        }
-        ArtworkMemoryCache.put(filePath, loaded)
-        bitmap = loaded
+        bitmap = ArtworkMemoryCache.getOrDecode(filePath, bucket)
     }
     return bitmap
 }
@@ -471,8 +517,9 @@ fun DesktopAlbumCover(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 8.dp,
     iconSize: Dp = 24.dp,
+    targetSizePx: Int = if (iconSize <= 30.dp) 160 else 720,
 ) {
-    val bmp = rememberSongArtwork(filePath)
+    val bmp = rememberSongArtwork(filePath, targetSizePx)
     val shape = RoundedCornerShape(cornerRadius)
     Box(
         modifier = modifier
@@ -568,9 +615,10 @@ fun DesktopAudioSpecStamp(
 @Composable
 fun DesktopSpinningVinylDisc(
     filePath: String?,
-    rotationDegrees: Float,
+    rotationDegrees: Float = 0f,
     discSize: Dp,
     modifier: Modifier = Modifier,
+    rotationProvider: (() -> Float)? = null,
 ) {
     // Outer shadow & stationary studio lamp reflection stay FIXED in space;
     // ONLY the vinyl grooves and center cover label rotate serenely underneath!
@@ -585,7 +633,7 @@ fun DesktopSpinningVinylDisc(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer { rotationZ = rotationDegrees },
+                .graphicsLayer { rotationZ = rotationProvider?.invoke() ?: rotationDegrees },
             contentAlignment = Alignment.Center,
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -1075,43 +1123,37 @@ fun DesktopEditorialLyrics(
                 Text(pTxt, fontSize = (15.5f * lScale).sp, lineHeight = (22f * lScale).sp, fontFamily = family, fontStyle = effectiveStyle, color = mutedColor.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = textAlign, modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(12.dp))
             }
-            val lineStartMs = activeLine?.timeMs ?: 0L
-            val nextStartMs = nextLine?.timeMs ?: (lineStartMs + 4200L)
-            val lineDurMs = (nextStartMs - lineStartMs).coerceIn(1200L, 12000L)
-            val useKaraoke = when (karaokeMode) {
+            val isCreditLine = remember(curTxt) { isDesktopLyricCreditMetadata(curTxt) }
+            val useKaraoke = !isCreditLine && when (karaokeMode) {
                 DesktopKaraokeLyricMode.CLASSIC -> false
                 DesktopKaraokeLyricMode.EXACT_ONLY -> !activeLine?.words.isNullOrEmpty()
                 DesktopKaraokeLyricMode.SMART -> true
             }
+            val smoothPos = rememberDesktopSmoothPlaybackClock(positionMsProvider = { positionMs }, isPlaying = isPlaying)
             val baseLitColor = if (highlightAccent) accentColor else activeColor
-            val unlitColor = mutedColor.copy(alpha = 0.45f)
-            val karaokeAnnotated = if (useKaraoke && curTxt.isNotEmpty() && positionMs > 0L) {
-                val exactWords = activeLine?.words.orEmpty()
-                if (exactWords.isNotEmpty()) {
-                    buildAnnotatedString {
-                        exactWords.forEach { w ->
-                            val progress = ((positionMs - w.startMs).toFloat() / (w.endMs - w.startMs).coerceAtLeast(1L)).coerceIn(0f, 1f)
-                            val c = lerp(unlitColor, baseLitColor, progress)
-                            withStyle(SpanStyle(color = c)) { append(w.text) }
-                        }
-                    }
-                } else {
-                    val progress = ((positionMs - lineStartMs).toFloat() / (lineDurMs * 0.88f)).coerceIn(0f, 1f)
-                    val litChars = (curTxt.length * progress).toInt().coerceIn(0, curTxt.length)
-                    buildAnnotatedString {
-                        if (litChars > 0) {
-                            withStyle(SpanStyle(color = baseLitColor)) { append(curTxt.substring(0, litChars)) }
-                        }
-                        if (litChars < curTxt.length) {
-                            withStyle(SpanStyle(color = unlitColor)) { append(curTxt.substring(litChars)) }
-                        }
-                    }
-                }
-            } else null
+            val unlitColor = mutedColor.copy(alpha = 0.42f)
 
-            if (karaokeAnnotated != null) {
+            if (isCreditLine) {
                 Text(
-                    text = karaokeAnnotated,
+                    text = curTxt,
+                    fontSize = (16f * lScale).sp,
+                    lineHeight = (22f * lScale).sp,
+                    fontFamily = family,
+                    fontStyle = effectiveStyle,
+                    fontWeight = FontWeight.Normal,
+                    color = mutedColor.copy(alpha = 0.72f),
+                    textAlign = textAlign,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else if (useKaraoke && curTxt.isNotEmpty() && smoothPos > 0L) {
+                val sweepProg = computeDesktopLineSweepProgress(activeLine, nextLine, smoothPos)
+                DesktopLiquidSweepLyricText(
+                    text = curTxt,
+                    progress = sweepProg,
+                    litColor = baseLitColor,
+                    unlitColor = unlitColor,
                     fontSize = dynamicSp.sp,
                     lineHeight = (dynamicSp * 1.24f).sp,
                     fontFamily = family,
@@ -1119,7 +1161,6 @@ fun DesktopEditorialLyrics(
                     fontWeight = FontWeight.Bold,
                     textAlign = textAlign,
                     maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth(),
                 )
             } else {
@@ -1152,7 +1193,8 @@ fun DesktopEditorialLyrics(
 fun DesktopPosterWallStage(
     currentSong: DesktopSong,
     allSongs: List<DesktopSong>,
-    vinylRotation: Float,
+    vinylRotation: Float = 0f,
+    vinylRotationProvider: (() -> Float)? = null,
     lyrics: List<LyricLine>,
     activeLyricIdx: Int,
     accentColor: Color,
@@ -1244,6 +1286,7 @@ fun DesktopPosterWallStage(
             DesktopSpinningVinylDisc(
                 filePath = currentSong.filePath,
                 rotationDegrees = vinylRotation,
+                rotationProvider = vinylRotationProvider,
                 discSize = discSize,
                 modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onTogglePlayPause),
             )
@@ -1406,7 +1449,8 @@ fun DesktopVintageReceiverDeck(
                         .border(1.dp, Color.White.copy(alpha = 0.42f), RoundedCornerShape(3.dp)),
                 ) {
                     // Procedural brushed aluminum hairlines + horizontal seam line
-                    Canvas(modifier = Modifier.fillMaxSize()) {
+                    val stringPaths = remember { Array(3) { Path() } }
+                Canvas(modifier = Modifier.fillMaxSize()) {
                         for (i in 0..46) {
                             val y = size.height * (i / 46f)
                             drawLine(Color.White.copy(alpha = if (i % 4 == 0) 0.09f else 0.03f), Offset(0f, y), Offset(size.width, y), strokeWidth = 0.7f)
@@ -1984,27 +2028,49 @@ fun DesktopLiveSpectrumBar(
                     }
 
                     DesktopSpectrumStyle.HARMONIC_STRINGS -> {
-                        val midY = totalH * 0.52f
-                        val pts = displayBars.coerceAtMost(110)
+                        val midY = totalH * 0.54f
+                        val pts = displayBars.coerceAtMost(96)
                         val step = totalW / (pts - 1).coerceAtLeast(1)
+                        val bandCount = animatedLevels.size.coerceAtLeast(8)
+                        var bassE = 0f; var midE = 0f; var highE = 0f
+                        for (b in 0 until bandCount) {
+                            val f = b.toFloat() / bandCount
+                            when {
+                                f < 0.28f -> bassE += animatedLevels[b]
+                                f < 0.64f -> midE += animatedLevels[b]
+                                else -> highE += animatedLevels[b]
+                            }
+                        }
+                        bassE = (bassE / (bandCount * 0.28f).coerceAtLeast(1f)).coerceIn(0f, 1.3f)
+                        midE = (midE / (bandCount * 0.36f).coerceAtLeast(1f)).coerceIn(0f, 1.3f)
+                        highE = (highE / (bandCount * 0.36f).coerceAtLeast(1f)).coerceIn(0f, 1.3f)
+
                         for (layer in 0..2) {
-                            val ampScale = when (layer) { 0 -> 0.44f; 1 -> 0.30f; else -> 0.19f }
-                            val path = Path()
+                            val path = stringPaths[layer]
+                            path.reset()
+                            val bandStart = when (layer) { 0 -> 0.00f; 1 -> 0.22f; else -> 0.55f }
+                            val bandSpan = when (layer) { 0 -> 0.38f; 1 -> 0.46f; else -> 0.45f }
+                            val globalBand = when (layer) { 0 -> bassE; 1 -> midE; else -> highE }
+                            val ampScale = when (layer) { 0 -> 0.46f; 1 -> 0.34f; else -> 0.24f }
+                            val polarity = when (layer) { 0 -> -1f; 1 -> 1f; else -> -0.75f }
+                            val standingK = when (layer) { 0 -> 1.0f; 1 -> 2.0f; else -> 3.0f }
                             var px = 0f; var py = midY
                             for (i in 0 until pts) {
                                 val x = i * step
                                 val u = i.toFloat() / (pts - 1).coerceAtLeast(1)
-                                val edgeTap = sin(u * PI).toFloat().coerceAtLeast(0.10f)
-                                val osc = sin(phaseTime * (1.15f + layer * 0.28f) + u * 16f + layer * 1.45f)
-                                val y = midY + osc * sampleSmooth(animatedLevels, u) * totalH * ampScale * edgeTap
+                                val edgeTap = sin(u * PI).toFloat().coerceAtLeast(0.06f)
+                                val localFft = sampleSmooth(animatedLevels, (bandStart + u * bandSpan).coerceIn(0f, 1f))
+                                val standing = sin(u * PI * standingK + phaseTime * (1.2f + layer * 0.55f)).toFloat()
+                                val disp = (localFft * 0.72f + globalBand * 0.28f * standing) * polarity
+                                val y = midY + disp * totalH * ampScale * edgeTap
                                 if (i == 0) path.moveTo(x, y) else path.quadraticTo(px, py, (px + x) * 0.5f, (py + y) * 0.5f)
                                 px = x; py = y
                             }
                             path.lineTo(px, py)
-                            val strokeW = when (layer) { 0 -> 2.2f * densityPx; 1 -> 1.4f * densityPx; else -> 0.9f * densityPx }
-                            val alphaP = when (layer) { 0 -> 0.94f; 1 -> 0.58f; else -> 0.34f }
+                            val strokeW = when (layer) { 0 -> 2.1f * densityPx; 1 -> 1.4f * densityPx; else -> 0.95f * densityPx }
+                            val alphaP = when (layer) { 0 -> 0.95f; 1 -> 0.64f; else -> 0.38f }
                             clipRect(0f, 0f, playheadX, totalH) {
-                                if (layer == 0) drawPath(path, color = playedMid.copy(alpha = 0.22f), style = Stroke(6.0f * densityPx, cap = StrokeCap.Round))
+                                if (layer == 0) drawPath(path, color = playedMid.copy(alpha = 0.22f), style = Stroke(5.8f * densityPx, cap = StrokeCap.Round))
                                 drawPath(path, color = if (layer == 0) playedTip.copy(alpha = alphaP) else playedMid.copy(alpha = alphaP), style = Stroke(strokeW, cap = StrokeCap.Round))
                             }
                             clipRect(playheadX, 0f, totalW, totalH) {
@@ -2077,6 +2143,108 @@ fun DesktopLiveSpectrumBar(
                         drawLine(color = unplayedColor.copy(alpha = 0.24f), start = Offset(0f, horizonY), end = Offset(totalW, horizonY), strokeWidth = 0.9f * densityPx)
                         drawLine(color = playedMid.copy(alpha = 0.92f), start = Offset(0f, horizonY), end = Offset(playheadX, horizonY), strokeWidth = 1.4f * densityPx)
                         drawCircle(color = champagneGold, radius = 3.6f * densityPx, center = Offset(playheadX, horizonY))
+                    }
+
+                    DesktopSpectrumStyle.STUDIO_VU_SCALE -> {
+                        // Braun / Swiss precision acoustic ruler: hairline ticks breathing gently upward + luminous vernier cursor
+                        val ticks = (totalW / (6.8f * densityPx)).toInt().coerceIn(54, 108)
+                        val step = totalW / (ticks - 1).coerceAtLeast(1)
+                        val baseY = horizonY
+                        val maxRise = (horizonY - 8f * densityPx).coerceAtLeast(16f)
+                        for (i in 0 until ticks) {
+                            val x = i * step
+                            val u = i.toFloat() / (ticks - 1).coerceAtLeast(1)
+                            val isMajor = i % 6 == 0
+                            val isPlayed = x <= playheadX
+                            val fft = sampleSmooth(animatedLevels, u)
+                            val restH = (if (isMajor) 9.5f else 4.5f) * densityPx
+                            val tickH = (restH + fft * maxRise * (if (isMajor) 0.88f else 0.72f)).coerceAtMost(maxRise)
+                            val strokeW = (if (isMajor) 1.35f else 0.85f) * densityPx
+                            val col = if (isPlayed) {
+                                androidx.compose.ui.graphics.lerp(playedMid, playedTip, (fft * 1.15f).coerceIn(0f, 1f)).copy(alpha = if (isMajor) 0.92f else 0.68f)
+                            } else {
+                                unplayedColor.copy(alpha = if (isMajor) 0.56f else 0.34f)
+                            }
+                            drawLine(
+                                color = col,
+                                start = Offset(x, baseY),
+                                end = Offset(x, baseY - tickH),
+                                strokeWidth = strokeW,
+                                cap = StrokeCap.Round,
+                            )
+                            if (isMajor) {
+                                // Delicate lower ruler sub-tick below datum line
+                                drawLine(
+                                    color = if (isPlayed) playedMid.copy(alpha = 0.45f) else unplayedColor.copy(alpha = 0.24f),
+                                    start = Offset(x, baseY + 1.5f * densityPx),
+                                    end = Offset(x, baseY + 4.5f * densityPx),
+                                    strokeWidth = 0.9f * densityPx,
+                                )
+                            }
+                        }
+                        // Precision horizontal datum rail
+                        drawLine(color = unplayedColor.copy(alpha = 0.28f), start = Offset(0f, baseY), end = Offset(totalW, baseY), strokeWidth = 1.0f * densityPx)
+                        drawLine(color = playedTip.copy(alpha = 0.92f), start = Offset(0f, baseY), end = Offset(playheadX, baseY), strokeWidth = 1.4f * densityPx)
+                        // Floating luminous vernier needle at playheadX
+                        val needleTop = (baseY - maxRise * 0.92f).coerceAtLeast(4f * densityPx)
+                        drawLine(
+                            brush = Brush.verticalGradient(0.0f to Color.Transparent, 0.35f to playedTip.copy(alpha = 0.38f), 1.0f to champagneGold.copy(alpha = 0.20f), startY = needleTop, endY = baseY),
+                            start = Offset(playheadX, needleTop),
+                            end = Offset(playheadX, baseY),
+                            strokeWidth = 6.0f * densityPx,
+                            cap = StrokeCap.Round,
+                        )
+                        drawLine(
+                            brush = Brush.verticalGradient(0.0f to playedTip.copy(alpha = 0.45f), 0.5f to playedTip.copy(alpha = 0.95f), 1.0f to champagneGold, startY = needleTop, endY = baseY),
+                            start = Offset(playheadX, needleTop),
+                            end = Offset(playheadX, baseY),
+                            strokeWidth = 1.6f * densityPx,
+                            cap = StrokeCap.Round,
+                        )
+                        drawCircle(color = champagneGold, radius = 3.2f * densityPx, center = Offset(playheadX, baseY))
+                    }
+
+                    DesktopSpectrumStyle.ACOUSTIC_RIPPLE -> {
+                        // Symmetrical ultra-fine mirrored vertical micro-filaments with calm Gaussian arch tapering
+                        val midY = totalH * 0.50f
+                        val bars = (totalW / (5.2f * densityPx)).toInt().coerceIn(64, 128)
+                        val step = totalW / (bars - 1).coerceAtLeast(1)
+                        val maxHalfH = (totalH * 0.43f).coerceAtLeast(12f)
+                        for (i in 0 until bars) {
+                            val x = i * step
+                            val u = i.toFloat() / (bars - 1).coerceAtLeast(1)
+                            val isPlayed = x <= playheadX
+                            val arch = sin(u * PI).toFloat().coerceAtLeast(0f)
+                            val envelope = arch * arch * 0.88f + 0.12f * arch
+                            val fft = sampleSmooth(animatedLevels, u)
+                            val halfH = (1.6f * densityPx + fft * maxHalfH * envelope * 1.15f).coerceAtMost(maxHalfH)
+                            val strokeW = 1.25f * densityPx
+                            val baseCol = if (isPlayed) {
+                                androidx.compose.ui.graphics.lerp(playedColor, playedTip, (0.35f + fft * 0.65f).coerceIn(0f, 1f))
+                            } else {
+                                unplayedColor
+                            }
+                            // Upper filament
+                            drawLine(
+                                color = baseCol.copy(alpha = if (isPlayed) (0.45f + 0.52f * envelope) else (0.22f + 0.34f * envelope)),
+                                start = Offset(x, midY),
+                                end = Offset(x, midY - halfH),
+                                strokeWidth = strokeW,
+                                cap = StrokeCap.Round,
+                            )
+                            // Symmetrical mirrored lower filament (slightly softer reflection)
+                            drawLine(
+                                color = baseCol.copy(alpha = if (isPlayed) (0.30f + 0.38f * envelope) else (0.14f + 0.24f * envelope)),
+                                start = Offset(x, midY),
+                                end = Offset(x, midY + halfH * 0.86f),
+                                strokeWidth = strokeW,
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                        // Razor-thin central calm axis
+                        drawLine(color = unplayedColor.copy(alpha = 0.26f), start = Offset(0f, midY), end = Offset(totalW, midY), strokeWidth = 0.9f * densityPx)
+                        drawLine(color = playedTip.copy(alpha = 0.92f), start = Offset(0f, midY), end = Offset(playheadX, midY), strokeWidth = 1.25f * densityPx)
+                        drawCircle(color = champagneGold, radius = 3.2f * densityPx, center = Offset(playheadX, midY))
                     }
                 }
             }
@@ -2727,6 +2895,183 @@ fun DesktopAlphabetIndexBar(
  * 16:9 Desktop-Native Multi-Line Scrolling Bilingual Lyrics (5-7 visible lines, smooth offscreen top/bottom fade,
  * 60fps word-by-word karaoke sweep on the active line, click any line to seek).
  */
+
+/**
+ * Monotonic display-rate smooth playback clock for Desktop (60/120/144fps) so karaoke sweeps
+ * glide smoothly between 80ms audio-engine position ticks with zero jitter.
+ */
+@Composable
+fun rememberDesktopSmoothPlaybackClock(
+    positionMsProvider: () -> Long,
+    isPlaying: Boolean,
+): Long {
+    var smoothMs by remember { mutableLongStateOf(positionMsProvider()) }
+    LaunchedEffect(isPlaying) {
+        var anchorPos = positionMsProvider()
+        var anchorNanos = System.nanoTime()
+        smoothMs = anchorPos
+        if (!isPlaying) return@LaunchedEffect
+        while (true) {
+            withFrameNanos { nowNanos ->
+                val rawPos = positionMsProvider()
+                val projected = anchorPos + ((nowNanos - anchorNanos) / 1_000_000L)
+                val drift = rawPos - projected
+                if (abs(drift) > 220L || rawPos < anchorPos - 40L) {
+                    anchorPos = rawPos
+                    anchorNanos = nowNanos
+                    smoothMs = rawPos
+                } else {
+                    if (abs(drift) > 12L) {
+                        anchorPos += (drift * 0.14f).toLong()
+                    }
+                    smoothMs = (anchorPos + ((nowNanos - anchorNanos) / 1_000_000L)).coerceAtLeast(0L)
+                }
+            }
+        }
+    }
+    LaunchedEffect(positionMsProvider()) {
+        if (!isPlaying) smoothMs = positionMsProvider()
+    }
+    return smoothMs
+}
+
+private val DESKTOP_CREDIT_REGEX = Regex(
+    "^\s*(作词|作曲|编曲|词|曲|混音|母带|制作人|制作|监制|出品|发行|录音|和声|吉他|贝斯|鼓|弦乐|钢琴|键盘|演唱|原唱|翻唱|统筹|企划|文案|封面|视觉|OP|SP|Lyricist|Composer|Arranger|Producer|Mixed\s*by|Mastered\s*by|Written\s*by|Vocal|Guitar|Bass|Drums)\s*[:：\-—]",
+    RegexOption.IGNORE_CASE,
+)
+
+fun isDesktopLyricCreditMetadata(text: String): Boolean {
+    val t = text.trim()
+    if (t.isEmpty()) return false
+    return DESKTOP_CREDIT_REGEX.containsMatchIn(t)
+}
+
+/**
+ * Apple-Music-grade sub-pixel feathered liquid-sweep karaoke text renderer using
+ * TextLayoutResult + CompositingStrategy.Offscreen + BlendMode.SrcIn.
+ */
+@Composable
+fun DesktopLiquidSweepLyricText(
+    text: String,
+    progress: Float,
+    litColor: Color,
+    unlitColor: Color,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    lineHeight: androidx.compose.ui.unit.TextUnit,
+    fontFamily: FontFamily,
+    fontStyle: FontStyle,
+    fontWeight: FontWeight,
+    textAlign: TextAlign,
+    maxLines: Int = 3,
+    modifier: Modifier = Modifier,
+) {
+    var layoutResult by remember(text, fontSize) { mutableStateOf<TextLayoutResult?>(null) }
+    val p = progress.coerceIn(0f, 1f)
+    val eased = p * p * (3f - 2f * p)
+    Text(
+        text = text,
+        fontSize = fontSize,
+        lineHeight = lineHeight,
+        fontFamily = fontFamily,
+        fontStyle = fontStyle,
+        fontWeight = fontWeight,
+        color = unlitColor,
+        textAlign = textAlign,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { layoutResult = it },
+        modifier = modifier
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val layout = layoutResult ?: return@drawWithContent
+                val lineCount = layout.lineCount
+                if (lineCount <= 0) return@drawWithContent
+                var totalWidth = 0f
+                val lineWidths = FloatArray(lineCount)
+                for (i in 0 until lineCount) {
+                    val w = (layout.getLineRight(i) - layout.getLineLeft(i)).coerceAtLeast(1f)
+                    lineWidths[i] = w
+                    totalWidth += w
+                }
+                if (totalWidth <= 0f) return@drawWithContent
+                val targetDist = totalWidth * eased
+                val featherPx = 42f
+                var acc = 0f
+                for (i in 0 until lineCount) {
+                    val lLeft = layout.getLineLeft(i)
+                    val lTop = layout.getLineTop(i)
+                    val lBottom = layout.getLineBottom(i)
+                    val lW = lineWidths[i]
+                    val lineDist = targetDist - acc
+                    acc += lW
+                    if (lineDist <= -featherPx) break
+                    if (lineDist >= lW + featherPx) {
+                        drawRect(
+                            color = litColor,
+                            topLeft = Offset(lLeft, lTop),
+                            size = Size(lW + 2f, lBottom - lTop),
+                            blendMode = BlendMode.SrcIn,
+                        )
+                    } else {
+                        val sweepX = lLeft + lineDist
+                        val gradStart = (sweepX - featherPx * 0.65f).coerceAtLeast(lLeft - 1f)
+                        val gradEnd = (sweepX + featherPx * 0.35f).coerceAtLeast(gradStart + 1f)
+                        if (gradStart > lLeft) {
+                            drawRect(
+                                color = litColor,
+                                topLeft = Offset(lLeft, lTop),
+                                size = Size(gradStart - lLeft, lBottom - lTop),
+                                blendMode = BlendMode.SrcIn,
+                            )
+                        }
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                0.0f to litColor,
+                                1.0f to unlitColor,
+                                startX = gradStart,
+                                endX = gradEnd,
+                            ),
+                            topLeft = Offset(gradStart, lTop),
+                            size = Size((gradEnd - gradStart).coerceAtLeast(1f), lBottom - lTop),
+                            blendMode = BlendMode.SrcIn,
+                        )
+                    }
+                }
+            },
+    )
+}
+
+private fun computeDesktopLineSweepProgress(
+    line: LyricLine?,
+    nextLine: LyricLine?,
+    smoothPosMs: Long,
+): Float {
+    if (line == null || smoothPosMs <= 0L) return 1f
+    val exactWords = line.words
+    if (exactWords.isNotEmpty()) {
+        val totalChars = exactWords.sumOf { it.text.length }.coerceAtLeast(1)
+        var accChars = 0f
+        for (w in exactWords) {
+            val wLen = w.text.length.coerceAtLeast(1).toFloat()
+            when {
+                smoothPosMs >= w.endMs -> accChars += wLen
+                smoothPosMs <= w.startMs -> break
+                else -> {
+                    val frac = ((smoothPosMs - w.startMs).toFloat() / (w.endMs - w.startMs).coerceAtLeast(1L)).coerceIn(0f, 1f)
+                    accChars += wLen * frac
+                    break
+                }
+            }
+        }
+        return (accChars / totalChars.toFloat()).coerceIn(0f, 1f)
+    }
+    val lineStartMs = line.timeMs
+    val nextStartMs = nextLine?.timeMs ?: (lineStartMs + 4200L)
+    val lineDurMs = (nextStartMs - lineStartMs).coerceIn(1200L, 11000L)
+    return ((smoothPosMs - lineStartMs).toFloat() / (lineDurMs * 0.90f)).coerceIn(0f, 1f)
+}
+
 @Composable
 fun DesktopMultiLineScrollingLyrics(
     lyrics: List<LyricLine>,
@@ -2762,9 +3107,9 @@ fun DesktopMultiLineScrollingLyrics(
     }
 
     val safeActive = activeIdx.coerceIn(0, lyrics.lastIndex)
-    val windowIndices = remember(safeActive, lyrics.size) {
-        ((safeActive - 2)..(safeActive + 2)).toList()
-    }
+    val halfSpan = ((visibleLines.coerceIn(3, 7) - 1) / 2).coerceIn(1, 3)
+    val smoothPosMs = rememberDesktopSmoothPlaybackClock(positionMsProvider = { positionMs }, isPlaying = isPlaying)
+    val lineSpacing = if (visibleLines >= 7) 14.dp else 20.dp
 
     Box(
         modifier = modifier
@@ -2774,8 +3119,8 @@ fun DesktopMultiLineScrollingLyrics(
                 drawRect(
                     brush = Brush.verticalGradient(
                         0.00f to Color.Transparent,
-                        0.16f to Color.Black,
-                        0.84f to Color.Black,
+                        0.15f to Color.Black,
+                        0.85f to Color.Black,
                         1.00f to Color.Transparent,
                     ),
                     blendMode = BlendMode.DstIn,
@@ -2783,74 +3128,104 @@ fun DesktopMultiLineScrollingLyrics(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically),
-        ) {
-            windowIndices.forEach { idx ->
-                val line = lyrics.getOrNull(idx)
-                val dist = abs(idx - safeActive)
-                val isActive = idx == safeActive
-                val alphaFactor = when (dist) {
-                    0 -> 1.0f
-                    1 -> 0.54f
-                    else -> 0.28f
-                }
-                if (line == null) {
-                    Spacer(modifier = Modifier.height(34.dp))
-                } else {
-                    val (primary, secondary) = remember(line) {
-                        splitBilingualLyric(line.primaryText, line.secondaryText)
+        AnimatedContent(
+            targetState = safeActive,
+            transitionSpec = {
+                (fadeIn(tween(260, easing = FastOutSlowInEasing)) + slideInVertically(tween(300, easing = FastOutSlowInEasing)) { it / 10 }) togetherWith
+                    (fadeOut(tween(180)) + slideOutVertically(tween(200)) { -it / 12 })
+            },
+            label = "multiLineLyricGlide",
+        ) { targetActive ->
+            val windowIndices = remember(targetActive, halfSpan, lyrics.size) {
+                ((targetActive - halfSpan)..(targetActive + halfSpan)).toList()
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(lineSpacing, Alignment.CenterVertically),
+            ) {
+                windowIndices.forEach { idx ->
+                    val line = lyrics.getOrNull(idx)
+                    val dist = abs(idx - targetActive)
+                    val isActive = idx == targetActive
+                    val alphaFactor = when (dist) {
+                        0 -> 1.0f
+                        1 -> 0.56f
+                        2 -> 0.32f
+                        else -> 0.18f
                     }
-                    val nextLine = lyrics.getOrNull(idx + 1)
-                    val primarySp = (if (isActive) 27f else 19f) * lScale
-                    val secondarySp = (if (isActive) 17.5f else 14f) * lScale
+                    if (line == null) {
+                        Spacer(modifier = Modifier.height(30.dp))
+                    } else {
+                        val (primary, secondary) = remember(line) {
+                            splitBilingualLyric(line.primaryText, line.secondaryText)
+                        }
+                        val isCredit = remember(primary) { isDesktopLyricCreditMetadata(primary) }
+                        val nextLine = lyrics.getOrNull(idx + 1)
+                        val primarySp = when {
+                            isCredit -> 14.5f * lScale
+                            isActive -> 27f * lScale
+                            else -> 19f * lScale
+                        }
+                        val secondarySp = (if (isActive) 17.5f else 14f) * lScale
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .pointerHoverIcon(PointerIcon.Hand)
-                            .clickable { if (line.timeMs >= 0L) onSeekTo(line.timeMs) }
-                            .padding(vertical = 2.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        if (isActive && primary.isNotEmpty() && positionMs > 0L) {
-                            val useKaraoke = when (karaokeMode) {
-                                DesktopKaraokeLyricMode.CLASSIC -> false
-                                DesktopKaraokeLyricMode.EXACT_ONLY -> line.words.isNotEmpty()
-                                DesktopKaraokeLyricMode.SMART -> true
-                            }
-                            if (useKaraoke) {
-                                val unlit = mutedColor.copy(alpha = 0.46f)
-                                val lineDur = ((nextLine?.timeMs ?: (line.timeMs + 4200L)) - line.timeMs).coerceIn(1200L, 12000L)
-                                val annotated = if (line.words.isNotEmpty()) {
-                                    buildAnnotatedString {
-                                        line.words.forEach { w ->
-                                            val prog = ((positionMs - w.startMs).toFloat() / (w.endMs - w.startMs).coerceAtLeast(1L)).coerceIn(0f, 1f)
-                                            withStyle(SpanStyle(color = lerp(unlit, activeColor, prog))) { append(w.text) }
-                                        }
-                                    }
-                                } else {
-                                    val prog = ((positionMs - line.timeMs).toFloat() / (lineDur * 0.88f)).coerceIn(0f, 1f)
-                                    val lit = (primary.length * prog).toInt().coerceIn(0, primary.length)
-                                    buildAnnotatedString {
-                                        if (lit > 0) withStyle(SpanStyle(color = activeColor)) { append(primary.substring(0, lit)) }
-                                        if (lit < primary.length) withStyle(SpanStyle(color = unlit)) { append(primary.substring(lit)) }
-                                    }
-                                }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { if (line.timeMs >= 0L) onSeekTo(line.timeMs) }
+                                .padding(vertical = 2.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            if (isCredit) {
                                 Text(
-                                    text = annotated,
+                                    text = primary,
                                     fontSize = primarySp.sp,
                                     lineHeight = (primarySp * 1.28f).sp,
                                     fontFamily = family,
                                     fontStyle = effectiveStyle,
-                                    fontWeight = FontWeight.Bold,
+                                    fontWeight = FontWeight.Normal,
+                                    color = mutedColor.copy(alpha = if (isActive) 0.72f else alphaFactor * 0.80f),
                                     textAlign = TextAlign.Center,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                            } else if (isActive && primary.isNotEmpty() && smoothPosMs > 0L) {
+                                val useKaraoke = when (karaokeMode) {
+                                    DesktopKaraokeLyricMode.CLASSIC -> false
+                                    DesktopKaraokeLyricMode.EXACT_ONLY -> line.words.isNotEmpty()
+                                    DesktopKaraokeLyricMode.SMART -> true
+                                }
+                                if (useKaraoke) {
+                                    val sweepProg = computeDesktopLineSweepProgress(line, nextLine, smoothPosMs)
+                                    DesktopLiquidSweepLyricText(
+                                        text = primary,
+                                        progress = sweepProg,
+                                        litColor = activeColor,
+                                        unlitColor = mutedColor.copy(alpha = 0.42f),
+                                        fontSize = primarySp.sp,
+                                        lineHeight = (primarySp * 1.28f).sp,
+                                        fontFamily = family,
+                                        fontStyle = effectiveStyle,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2,
+                                    )
+                                } else {
+                                    Text(
+                                        text = primary,
+                                        fontSize = primarySp.sp,
+                                        lineHeight = (primarySp * 1.28f).sp,
+                                        fontFamily = family,
+                                        fontStyle = effectiveStyle,
+                                        fontWeight = FontWeight.Bold,
+                                        color = activeColor,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             } else {
                                 Text(
                                     text = primary,
@@ -2858,40 +3233,27 @@ fun DesktopMultiLineScrollingLyrics(
                                     lineHeight = (primarySp * 1.28f).sp,
                                     fontFamily = family,
                                     fontStyle = effectiveStyle,
-                                    fontWeight = FontWeight.Bold,
-                                    color = activeColor,
+                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                                    color = (if (isActive) activeColor else mutedColor).copy(alpha = alphaFactor),
                                     textAlign = TextAlign.Center,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                        } else {
-                            Text(
-                                text = primary,
-                                fontSize = primarySp.sp,
-                                lineHeight = (primarySp * 1.28f).sp,
-                                fontFamily = family,
-                                fontStyle = effectiveStyle,
-                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
-                                color = (if (isActive) activeColor else mutedColor).copy(alpha = alphaFactor),
-                                textAlign = TextAlign.Center,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        if (!secondary.isNullOrBlank()) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = secondary,
-                                fontSize = secondarySp.sp,
-                                lineHeight = (secondarySp * 1.25f).sp,
-                                fontFamily = family,
-                                fontStyle = effectiveStyle,
-                                color = (if (isActive) secondaryColor else mutedColor).copy(alpha = if (isActive) 0.90f else alphaFactor * 0.82f),
-                                textAlign = TextAlign.Center,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            if (!secondary.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = secondary,
+                                    fontSize = secondarySp.sp,
+                                    lineHeight = (secondarySp * 1.25f).sp,
+                                    fontFamily = family,
+                                    fontStyle = effectiveStyle,
+                                    color = (if (isActive) secondaryColor else mutedColor).copy(alpha = if (isActive) 0.90f else alphaFactor * 0.82f),
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }

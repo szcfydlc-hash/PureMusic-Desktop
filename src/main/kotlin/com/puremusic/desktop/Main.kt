@@ -124,6 +124,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -224,6 +227,8 @@ fun main() = application {
     var showQueueDrawer by remember { mutableStateOf(false) }
     var showEqDrawer by remember { mutableStateOf(false) }
 
+    // Isolated high-frequency playback clock: avoids recomposing root Sidebar/Library/Albums on every 80ms tick
+    val livePositionMsState = remember { mutableLongStateOf(0L) }
     var playerState by remember {
         mutableStateOf(
             DesktopPlayerState(
@@ -275,6 +280,7 @@ fun main() = application {
         val song = queue[index]
         activeQueue = queue
         currentIndex = index
+        livePositionMsState.longValue = 0L
         playerState = playerState.copy(
             currentSong = song,
             isPlaying = true,
@@ -350,7 +356,7 @@ fun main() = application {
     fun togglePlayOrResume() {
         val cur = playerState.currentSong
         if (cur != null) {
-            if (playerState.positionMs == 0L && !playerState.isPlaying && currentIndex in activeQueue.indices) {
+            if (livePositionMsState.longValue == 0L && !playerState.isPlaying && currentIndex in activeQueue.indices) {
                 playFromQueue(activeQueue, currentIndex)
             } else {
                 engine.togglePlayPause()
@@ -363,7 +369,10 @@ fun main() = application {
     engine = remember {
         DesktopAudioEngine(
             onStateChanged = { playing, pos, dur ->
-                playerState = playerState.copy(isPlaying = playing, positionMs = pos, durationMs = dur)
+                livePositionMsState.longValue = pos
+                if (playerState.isPlaying != playing || playerState.durationMs != dur) {
+                    playerState = playerState.copy(isPlaying = playing, positionMs = pos, durationMs = dur)
+                }
             },
             onTrackCompleted = {
                 scope.launch {
@@ -507,18 +516,19 @@ fun main() = application {
             .take(50)
     }
 
-    var vinylAngleDeg by remember { mutableFloatStateOf(0f) }
+    // GPU-Phase Vinyl Inertia Physics: runs ONLY when Immersive or Mini Player is visible,
+    // read via lambda inside graphicsLayer so root UI never recomposes at 60fps!
+    val vinylAngleState = remember { mutableFloatStateOf(0f) }
     var vinylVelocity by remember { mutableFloatStateOf(0f) }
-    val isPlayingForVinyl = playerState.isPlaying
-    val targetVinylRpm = config.immersiveVinylRpm
-    LaunchedEffect(isPlayingForVinyl, targetVinylRpm) {
-        var lastNanos = 0L
-        val baseDegPerSec = when (targetVinylRpm) {
-            78 -> 24f
-            45 -> 16f
-            else -> 11f
+    val isVinylVisible = showImmersiveStage || showMiniVinylWindow
+    val isPlayingForVinyl = playerState.isPlaying && isVinylVisible
+    LaunchedEffect(isPlayingForVinyl, isVinylVisible) {
+        if (!isVinylVisible) {
+            vinylVelocity = 0f
+            return@LaunchedEffect
         }
-        val targetVel = if (isPlayingForVinyl) baseDegPerSec else 0f
+        var lastNanos = 0L
+        val targetVel = if (isPlayingForVinyl) 11.5f else 0f
         while (isActive && (isPlayingForVinyl || vinylVelocity > 0.10f)) {
             withFrameNanos { nanos ->
                 val dt = if (lastNanos == 0L) 0f else ((nanos - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
@@ -526,7 +536,7 @@ fun main() = application {
                 val accel = if (isPlayingForVinyl) 3.6f else 2.8f
                 vinylVelocity += (targetVel - vinylVelocity) * (accel * dt).coerceAtMost(1f)
                 if (!isPlayingForVinyl && vinylVelocity < 0.15f) vinylVelocity = 0f
-                vinylAngleDeg = (vinylAngleDeg + vinylVelocity * dt) % 360f
+                vinylAngleState.floatValue = (vinylAngleState.floatValue + vinylVelocity * dt) % 360f
             }
         }
     }
@@ -542,6 +552,8 @@ fun main() = application {
             DesktopAccentColor.WALNUT -> arrayOf(Color(0xFF201E1C), Color(0xFF1A1816), Color(0xFF292623), Color(0xFF34302C), Color(0xFF433E39))
             DesktopAccentColor.OCHRE_GOLD -> arrayOf(Color(0xFF201F1C), Color(0xFF1A1916), Color(0xFF292723), Color(0xFF34312B), Color(0xFF433F37))
             DesktopAccentColor.PURE_INK -> arrayOf(Color(0xFF1D2026), Color(0xFF171A20), Color(0xFF252932), Color(0xFF2F3440), Color(0xFF3E4452))
+            DesktopAccentColor.NORDIC_MIST -> arrayOf(Color(0xFF141A21), Color(0xFF0F141A), Color(0xFF1C242E), Color(0xFF25303D), Color(0xFF334152))
+            DesktopAccentColor.TWILIGHT_PLUM -> arrayOf(Color(0xFF1B1519), Color(0xFF151013), Color(0xFF251D22), Color(0xFF30252C), Color(0xFF41333B))
         }
     } else {
         when (config.accentColor) {
@@ -551,12 +563,19 @@ fun main() = application {
             DesktopAccentColor.WALNUT -> arrayOf(Color(0xFFF4EFE7), Color(0xFFECE5DA), Color(0xFFFAF7F2), Color(0xFFEAE2D6), Color(0xFFDCD3C5))
             DesktopAccentColor.OCHRE_GOLD -> arrayOf(Color(0xFFF6F1E5), Color(0xFFEEE8D8), Color(0xFFFBF9F2), Color(0xFFECE5D5), Color(0xFFDFD7C3))
             DesktopAccentColor.PURE_INK -> arrayOf(Color(0xFFF3F2EF), Color(0xFFEAE9E4), Color(0xFFFAF9F7), Color(0xFFE7E5E0), Color(0xFFD9D7D1))
+            DesktopAccentColor.NORDIC_MIST -> arrayOf(Color(0xFFEDF1F5), Color(0xFFE4E9EF), Color(0xFFF7F9FB), Color(0xFFE1E7EE), Color(0xFFCFD8E2))
+            DesktopAccentColor.TWILIGHT_PLUM -> arrayOf(Color(0xFFF5F0F0), Color(0xFFECE5E6), Color(0xFFFAF7F7), Color(0xFFE8DFE1), Color(0xFFD9CDD0))
         }
     }
     val sidebarBg = pSide
     val colorScheme = if (config.darkMode) {
         darkColorScheme(
-            primary = if (config.accentColor == DesktopAccentColor.PURE_INK) Color(0xFFE0C08E) else rawAccent,
+            primary = when (config.accentColor) {
+                DesktopAccentColor.PURE_INK -> Color(0xFFE0C08E)
+                DesktopAccentColor.NORDIC_MIST -> Color(0xFF9DC3D9)
+                DesktopAccentColor.TWILIGHT_PLUM -> Color(0xFFD8A39D)
+                else -> rawAccent
+            },
             onPrimary = Color(0xFFF6F2EA),
             background = pBg,
             onBackground = Color(0xFFF2ECE1),
@@ -666,13 +685,13 @@ fun main() = application {
                     }
                     Key.DirectionRight -> {
                         if (showImmersiveStage && playerState.currentSong != null) {
-                            engine.seekTo((playerState.positionMs + 5_000L).coerceAtMost(playerState.durationMs))
+                            engine.seekTo((livePositionMsState.longValue + 5_000L).coerceAtMost(playerState.durationMs))
                             true
                         } else false
                     }
                     Key.DirectionLeft -> {
                         if (showImmersiveStage && playerState.currentSong != null) {
-                            engine.seekTo((playerState.positionMs - 5_000L).coerceAtLeast(0L))
+                            engine.seekTo((livePositionMsState.longValue - 5_000L).coerceAtLeast(0L))
                             true
                         } else false
                     }
@@ -695,10 +714,12 @@ fun main() = application {
         ) {
         MaterialTheme(colorScheme = colorScheme, typography = scaledTypo) {
             val currentLyricOffset = playerState.currentSong?.filePath?.let { config.lyricOffsetsMs[it] } ?: 0L
-            val effectivePosMs = (playerState.positionMs + currentLyricOffset).coerceAtLeast(0L)
-            val activeLyricIdx = remember(currentLyrics, effectivePosMs) {
-                val found = currentLyrics.indexOfLast { it.timeMs <= effectivePosMs }
-                if (found >= 0) found else if (currentLyrics.isNotEmpty()) 0 else -1
+            val activeLyricIdx by remember(currentLyrics, currentLyricOffset) {
+                derivedStateOf {
+                    val effectivePosMs = (livePositionMsState.longValue + currentLyricOffset).coerceAtLeast(0L)
+                    val found = currentLyrics.indexOfLast { it.timeMs <= effectivePosMs }
+                    if (found >= 0) found else if (currentLyrics.isNotEmpty()) 0 else -1
+                }
             }
 
             Box(
@@ -1177,6 +1198,7 @@ fun main() = application {
                     // 100% Unified Bookbinding Bottom Control Rail (razor-thin top progress line + calm controls)
                     UnifiedBottomControlRail(
                         playerState = playerState,
+                        positionMsProvider = { livePositionMsState.longValue },
                         isFavorite = playerState.currentSong?.filePath in config.favoritePaths,
                         isImmersive = false,
                         isDarkSurface = config.darkMode,
@@ -1275,10 +1297,11 @@ fun main() = application {
                             song = song,
                             allSongs = allSongs,
                             playerState = playerState,
+                            positionMsProvider = { livePositionMsState.longValue },
                             isFavorite = song.filePath in config.favoritePaths,
                             lyrics = currentLyrics,
                             activeLyricIdx = activeLyricIdx,
-                            vinylRotation = vinylAngleDeg,
+                            vinylRotationProvider = { vinylAngleState.floatValue },
                             sceneStyle = config.sceneStyle,
                             spectrumStyle = config.spectrumStyle,
                             showSpectrum = showSpectrumInImmersive,
@@ -1652,21 +1675,24 @@ fun main() = application {
         ) {
             MaterialTheme(colorScheme = colorScheme, typography = scaledTypo) {
                 val miniSong = playerState.currentSong
-                val miniDark = config.darkMode
+                // Default to Android Scheme B Warm Ceramic Rice-Paper White x Minimalist Ink Charcoal!
+                var miniWarmCeramic by remember { mutableStateOf(true) }
+                val miniDark = !miniWarmCeramic
                 val miniMood = rememberSongDominantColor(miniSong?.filePath)
-                val miniBg = if (miniDark) lerp(Color(0xFF141E26), miniMood, 0.34f) else colorScheme.surface
-                val miniInk = if (miniDark) Color(0xFFF4F7F9) else colorScheme.onBackground
-                val miniMuted = if (miniDark) Color(0xFFA2B0BA) else colorScheme.onSurfaceVariant
-                val miniAccent = if (miniDark) lerp(Color(0xFFA9DAE8), miniMood, 0.35f) else colorScheme.primary
-                val miniBorder = if (miniDark) Color.White.copy(alpha = 0.14f) else colorScheme.outline
-                val miniActiveIdx = remember(currentLyrics, playerState.positionMs) {
-                    val f = currentLyrics.indexOfLast { it.timeMs <= playerState.positionMs }
+                val miniBg = if (miniDark) lerp(Color(0xFF1A1B1E), miniMood, 0.28f) else Color(0xFFF6F2EB)
+                val miniInk = if (miniDark) Color(0xFFF4F2EC) else Color(0xFF1A1918)
+                val miniMuted = if (miniDark) Color(0xFFA4A29D) else Color(0xFF6B665E)
+                val miniAccent = if (miniDark) Color(0xFFE4C68D) else Color(0xFF1E1D1B)
+                val miniBorder = if (miniDark) Color.White.copy(alpha = 0.14f) else Color(0xFFD6CFC2)
+                val miniPosMs = livePositionMsState.longValue
+                val miniActiveIdx = remember(currentLyrics, miniPosMs) {
+                    val f = currentLyrics.indexOfLast { it.timeMs <= miniPosMs }
                     if (f >= 0) f else -1
                 }
                 val miniLyricText = remember(currentLyrics, miniActiveIdx) {
                     currentLyrics.getOrNull(miniActiveIdx)?.let { splitBilingualLyric(it.primaryText, it.secondaryText).first }.orEmpty()
                 }
-                val miniProg = if (playerState.durationMs > 0L) (playerState.positionMs.toFloat() / playerState.durationMs).coerceIn(0f, 1f) else 0f
+                val miniProg = if (playerState.durationMs > 0L) (miniPosMs.toFloat() / playerState.durationMs).coerceIn(0f, 1f) else 0f
                 val miniIsFav = miniSong?.filePath in config.favoritePaths
 
                 WindowDraggableArea(modifier = Modifier.fillMaxSize()) {
@@ -1688,7 +1714,7 @@ fun main() = application {
                             Box(modifier = Modifier.width(102.dp).height(76.dp), contentAlignment = Alignment.CenterStart) {
                                 DesktopSpinningVinylDisc(
                                     filePath = miniSong?.filePath,
-                                    rotationDegrees = vinylAngleDeg,
+                                    rotationProvider = { vinylAngleState.floatValue },
                                     discSize = 68.dp,
                                     modifier = Modifier.align(Alignment.CenterEnd),
                                 )
@@ -1708,6 +1734,9 @@ fun main() = application {
                                         Text(miniSong?.artist ?: "简约音乐", fontSize = 11.5.sp, color = miniMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(onClick = { miniWarmCeramic = !miniWarmCeramic }, modifier = Modifier.size(22.dp).pointerHoverIcon(PointerIcon.Hand)) {
+                                            Icon(if (miniWarmCeramic) Icons.Rounded.DarkMode else Icons.Rounded.LightMode, contentDescription = "切换暖瓷/暗夜", tint = miniMuted, modifier = Modifier.size(12.5.dp))
+                                        }
                                         IconButton(onClick = { miniAlwaysOnTop = !miniAlwaysOnTop }, modifier = Modifier.size(22.dp).pointerHoverIcon(PointerIcon.Hand)) {
                                             Icon(Icons.Rounded.PushPin, contentDescription = "置顶", tint = if (miniAlwaysOnTop) miniAccent else miniMuted, modifier = Modifier.size(13.dp))
                                         }
@@ -1770,7 +1799,7 @@ fun main() = application {
                                         }
                                     }
                                     Text(
-                                        text = "${formatDuration(playerState.positionMs)} / ${formatDuration(playerState.durationMs)}",
+                                        text = "${formatDuration(miniPosMs)} / ${formatDuration(playerState.durationMs)}",
                                         fontSize = 10.5.sp,
                                         color = miniMuted,
                                     )
@@ -1811,6 +1840,7 @@ fun main() = application {
 @Composable
 private fun UnifiedBottomControlRail(
     playerState: DesktopPlayerState,
+    positionMsProvider: () -> Long = { playerState.positionMs },
     isFavorite: Boolean,
     isImmersive: Boolean,
     isDarkSurface: Boolean,
@@ -1846,7 +1876,8 @@ private fun UnifiedBottomControlRail(
     val ink = if (isDarkSurface) Color(0xFFF3EEE4) else MaterialTheme.colorScheme.onBackground
     val muted = if (isDarkSurface) Color(0xFFA69F95) else MaterialTheme.colorScheme.onSurfaceVariant
     val hairline = if (isDarkSurface) Color.White.copy(alpha = 0.14f) else MaterialTheme.colorScheme.outline
-    val progress = if (playerState.durationMs > 0L) (playerState.positionMs.toFloat() / playerState.durationMs).coerceIn(0f, 1f) else 0f
+    val currentPosMs = positionMsProvider()
+    val progress = if (playerState.durationMs > 0L) (currentPosMs.toFloat() / playerState.durationMs).coerceIn(0f, 1f) else 0f
 
     var railWidthPx by remember { mutableFloatStateOf(1f) }
 
@@ -1922,7 +1953,7 @@ private fun UnifiedBottomControlRail(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(song?.title ?: "暂未播放", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            text = if (song != null) "${song.artist} · ${formatDuration(playerState.positionMs)} / ${formatDuration(playerState.durationMs)}" else "选择一首本地唱片开始聆听",
+                            text = if (song != null) "${song.artist} · ${formatDuration(currentPosMs)} / ${formatDuration(playerState.durationMs)}" else "选择一首本地唱片开始聆听",
                             fontSize = 11.sp,
                             color = muted,
                             maxLines = 1,
@@ -1941,7 +1972,7 @@ private fun UnifiedBottomControlRail(
                     }
                 } else {
                     Text(
-                        text = "${formatDuration(playerState.positionMs)}  /  ${formatDuration(playerState.durationMs)}",
+                        text = "${formatDuration(currentPosMs)}  /  ${formatDuration(playerState.durationMs)}",
                         fontSize = 12.sp,
                         color = muted,
                     )
@@ -2375,15 +2406,23 @@ private fun DesktopLibraryPage(
                     }
                     Box(modifier = Modifier.fillMaxSize()) {
                         LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(end = 32.dp)) {
-                            items(artists, key = { it.name }) { artist ->
+                            items(artists, key = { it.name }, contentType = { "artist" }) { artist ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .desktopHoverClickable(shape = RoundedCornerShape(6.dp)) { onSelectArtist(artist) }
-                                        .padding(horizontal = 8.dp, vertical = (density.rowPaddingDp + 2).dp),
+                                        .desktopHoverClickable(shape = RoundedCornerShape(8.dp)) { onSelectArtist(artist) }
+                                        .padding(horizontal = 8.dp, vertical = (density.rowPaddingDp + 1).dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Icon(Icons.Rounded.Person, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                                    DesktopAlbumCover(
+                                        filePath = artist.songs.firstOrNull()?.filePath,
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .border(0.6.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f), CircleShape),
+                                        cornerRadius = 19.dp,
+                                        iconSize = 17.dp,
+                                        targetSizePx = 160,
+                                    )
                                     Spacer(modifier = Modifier.width(14.dp))
                                     Text(artist.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text("${artist.songs.size} 首", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -3738,10 +3777,10 @@ private fun DesktopSettingsPage(
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column {
-                                Text("书脊强调色", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
+                                Text("书脊强调色 · ${config.accentColor.label}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = ink)
                                 Text("用于左侧书签竖线、当前播放与进度细线。", fontSize = 12.sp, color = muted)
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 DesktopAccentColor.entries.forEach { ac ->
                                     val sel = ac == config.accentColor
                                     Box(
@@ -4286,10 +4325,12 @@ private fun UnifiedImmersiveStage(
     song: DesktopSong,
     allSongs: List<DesktopSong>,
     playerState: DesktopPlayerState,
+    positionMsProvider: () -> Long = { playerState.positionMs },
     isFavorite: Boolean,
     lyrics: List<LyricLine>,
     activeLyricIdx: Int,
-    vinylRotation: Float,
+    vinylRotation: Float = 0f,
+    vinylRotationProvider: (() -> Float)? = null,
     sceneStyle: DesktopSceneStyle,
     spectrumStyle: DesktopSpectrumStyle,
     showSpectrum: Boolean,
@@ -4510,140 +4551,162 @@ private fun UnifiedImmersiveStage(
                         if (!translateStatusTip.isNullOrBlank()) {
                             Text(translateStatusTip, fontSize = 11.5.sp, color = activeAccent)
                         }
+                        val champagneGold = Color(0xFFE4C68D)
+                        val pillBg = if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.05f)
+                        val pillBorder = primaryInk.copy(alpha = 0.18f)
+                        val pillShape = RoundedCornerShape(15.dp)
+
                         if (lyrics.isNotEmpty()) {
                             Row(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.045f))
-                                    .border(0.6.dp, primaryInk.copy(alpha = 0.16f), RoundedCornerShape(14.dp))
+                                    .height(30.dp)
+                                    .clip(pillShape)
+                                    .background(pillBg)
+                                    .border(0.7.dp, pillBorder, pillShape)
                                     .pointerHoverIcon(PointerIcon.Hand)
                                     .clickable(enabled = !isTranslatingLyrics) { onTranslateLyrics() }
-                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                                    .padding(horizontal = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                Icon(Icons.Rounded.Translate, contentDescription = "歌词翻译", tint = if (isTranslatingLyrics) activeAccent else primaryInk, modifier = Modifier.size(14.dp))
-                                Text(if (isTranslatingLyrics) "译..." else "译", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = if (isTranslatingLyrics) activeAccent else primaryInk)
+                                Icon(Icons.Rounded.Translate, contentDescription = "歌词翻译", tint = if (isTranslatingLyrics) champagneGold else primaryInk, modifier = Modifier.size(13.5.dp))
+                                Text(if (isTranslatingLyrics) "译..." else "译", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = if (isTranslatingLyrics) champagneGold else primaryInk)
                             }
                         }
-                    // Top-Right Studio Customizer ('沉浸自定义') Popover
-                    Box {
-                        Row(
+                        // Top-Right Obsidian + Champagne-Gold Studio Tuner ('微调') Popover (Android v1.23 parity, zero vinyl RPM bloat)
+                        Box {
+                            Row(
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .clip(pillShape)
+                                    .background(if (customizerOpen) champagneGold.copy(alpha = 0.18f) else pillBg)
+                                    .border(0.7.dp, if (customizerOpen) champagneGold.copy(alpha = 0.72f) else pillBorder, pillShape)
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable { customizerOpen = !customizerOpen }
+                                    .padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(Icons.Rounded.Tune, contentDescription = "沉浸微调", tint = if (customizerOpen) champagneGold else primaryInk, modifier = Modifier.size(13.5.dp))
+                                Text("微调", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = if (customizerOpen) champagneGold else primaryInk)
+                            }
+                            DropdownMenu(
+                                expanded = customizerOpen,
+                                onDismissRequest = { customizerOpen = false },
+                                modifier = Modifier
+                                    .width(304.dp)
+                                    .background(if (isDarkScene) Color(0xF2191816) else Color(0xFAF8F5EF))
+                                    .border(0.8.dp, if (isDarkScene) champagneGold.copy(alpha = 0.24f) else MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                            ) {
+                                val popInk = if (isDarkScene) Color(0xFFF3EFE6) else Color(0xFF1A1918)
+                                val popMuted = if (isDarkScene) Color(0xFFA8A298) else Color(0xFF6B665E)
+                                val popGold = if (isDarkScene) champagneGold else activeAccent
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("沉浸微调", fontSize = 13.5.sp, fontWeight = FontWeight.Bold, color = popInk)
+                                    Text(
+                                        "重置",
+                                        fontSize = 11.5.sp,
+                                        color = popGold,
+                                        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable { onResetImmersivePreset() },
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Text("封面尺寸  ${(coverScale * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
+                                DesktopSleekSlider(
+                                    value = ((coverScale - 0.80f) / 0.45f).coerceIn(0f, 1f),
+                                    onValueChange = { onUpdateCoverScale(0.80f + it * 0.45f) },
+                                    activeColor = popGold,
+                                    trackColor = popMuted.copy(alpha = 0.24f),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text("歌词字号  ${(lyricFontScale * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
+                                DesktopSleekSlider(
+                                    value = ((lyricFontScale - 0.75f) / 0.70f).coerceIn(0f, 1f),
+                                    onValueChange = { target -> onAdjustLyricScale((0.75f + target * 0.70f) - lyricFontScale) },
+                                    activeColor = popGold,
+                                    trackColor = popMuted.copy(alpha = 0.24f),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("动态氛围强度  ${(moodStrength * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                        listOf(0f to "0%", 0.6f to "60%", 1f to "100%").forEach { (presetVal, presetLbl) ->
+                                            val sel = abs(moodStrength - presetVal) < 0.06f
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (sel) popGold.copy(alpha = 0.20f) else popMuted.copy(alpha = 0.12f))
+                                                    .border(0.6.dp, if (sel) popGold.copy(alpha = 0.75f) else Color.Transparent, RoundedCornerShape(6.dp))
+                                                    .pointerHoverIcon(PointerIcon.Hand)
+                                                    .clickable { onUpdateMoodStrength(presetVal) }
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                            ) {
+                                                Text(presetLbl, fontSize = 10.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal, color = if (sel) popGold else popMuted)
+                                            }
+                                        }
+                                    }
+                                }
+                                DesktopSleekSlider(
+                                    value = moodStrength.coerceIn(0f, 1f),
+                                    onValueChange = onUpdateMoodStrength,
+                                    activeColor = popGold,
+                                    trackColor = popMuted.copy(alpha = 0.24f),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("频谱高度", fontSize = 12.sp, color = popInk)
+                                    BookbindingSegmentedBar(
+                                        items = listOf(0 to "紧凑", 1 to "标准", 2 to "宽阔"),
+                                        selected = spectrumHeightMode,
+                                        onSelect = onUpdateSpectrumHeight,
+                                        compact = true,
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("歌词行数", fontSize = 12.sp, color = popInk)
+                                    BookbindingSegmentedBar(
+                                        items = listOf(3 to "3行", 5 to "5行", 7 to "7行"),
+                                        selected = lyricLines,
+                                        onSelect = onUpdateLyricLines,
+                                        compact = true,
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("封面亚光磨砂质感", fontSize = 12.sp, color = popInk)
+                                    BookbindingSlimSwitch(checked = matteCover, onCheckedChange = onToggleMatteCover)
+                                }
+                            }
+                        }
+                        Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (customizerOpen) activeAccent.copy(alpha = 0.22f) else if (isDarkScene) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.05f))
-                                .border(0.6.dp, if (customizerOpen) activeAccent.copy(alpha = 0.65f) else primaryInk.copy(alpha = 0.16f), RoundedCornerShape(14.dp))
+                                .height(30.dp)
+                                .clip(pillShape)
+                                .background(pillBg)
+                                .border(0.7.dp, pillBorder, pillShape)
                                 .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable { customizerOpen = !customizerOpen }
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                .clickable { onToggleFullscreen() }
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Icon(Icons.Rounded.Tune, contentDescription = "沉浸自定义", tint = if (customizerOpen) activeAccent else primaryInk, modifier = Modifier.size(14.dp))
-                            Text("自定义", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = if (customizerOpen) activeAccent else primaryInk)
+                            Icon(
+                                imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                contentDescription = "F11 全屏",
+                                tint = primaryInk,
+                                modifier = Modifier.size(16.dp),
+                            )
                         }
-                        DropdownMenu(
-                            expanded = customizerOpen,
-                            onDismissRequest = { customizerOpen = false },
-                            modifier = Modifier
-                                .width(292.dp)
-                                .background(if (isDarkScene) Color(0xFF232730) else MaterialTheme.colorScheme.surface)
-                                .border(0.8.dp, if (isDarkScene) Color.White.copy(alpha = 0.14f) else MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                        ) {
-                            val popInk = if (isDarkScene) Color(0xFFF3EFE6) else MaterialTheme.colorScheme.onBackground
-                            val popMuted = if (isDarkScene) Color(0xFFA6ABB6) else MaterialTheme.colorScheme.onSurfaceVariant
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("沉浸自定义", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = popInk)
-                                Text(
-                                    "重置",
-                                    fontSize = 11.5.sp,
-                                    color = activeAccent,
-                                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable { onResetImmersivePreset() },
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            Text("封面尺寸  ${(coverScale * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
-                            DesktopSleekSlider(
-                                value = ((coverScale - 0.80f) / 0.45f).coerceIn(0f, 1f),
-                                onValueChange = { onUpdateCoverScale(0.80f + it * 0.45f) },
-                                activeColor = activeAccent,
-                                trackColor = popMuted.copy(alpha = 0.25f),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Text("歌词字号  ${(lyricFontScale * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
-                            DesktopSleekSlider(
-                                value = ((lyricFontScale - 0.75f) / 0.70f).coerceIn(0f, 1f),
-                                onValueChange = { target -> onAdjustLyricScale((0.75f + target * 0.70f) - lyricFontScale) },
-                                activeColor = activeAccent,
-                                trackColor = popMuted.copy(alpha = 0.25f),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Text("动态氛围强度  ${(moodStrength * 100).toInt()}%", fontSize = 11.5.sp, color = popMuted)
-                            DesktopSleekSlider(
-                                value = moodStrength.coerceIn(0f, 1f),
-                                onValueChange = onUpdateMoodStrength,
-                                activeColor = activeAccent,
-                                trackColor = popMuted.copy(alpha = 0.25f),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("频谱高度", fontSize = 12.sp, color = popInk)
-                                BookbindingSegmentedBar(
-                                    items = listOf(0 to "紧凑", 1 to "标准", 2 to "宽阔"),
-                                    selected = spectrumHeightMode,
-                                    onSelect = onUpdateSpectrumHeight,
-                                    compact = true,
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("歌词行数", fontSize = 12.sp, color = popInk)
-                                BookbindingSegmentedBar(
-                                    items = listOf(3 to "3行", 5 to "5行", 7 to "7行"),
-                                    selected = lyricLines,
-                                    onSelect = onUpdateLyricLines,
-                                    compact = true,
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("黑胶转速", fontSize = 12.sp, color = popInk)
-                                BookbindingSegmentedBar(
-                                    items = listOf(33 to "33", 45 to "45", 78 to "78"),
-                                    selected = vinylRpm,
-                                    onSelect = onUpdateVinylRpm,
-                                    compact = true,
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("封面亚光磨砂质感", fontSize = 12.sp, color = popInk)
-                                BookbindingSlimSwitch(checked = matteCover, onCheckedChange = onToggleMatteCover)
-                            }
-                        }
-                    }
-                    IconButton(
-                        onClick = onToggleFullscreen,
-                        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
-                    ) {
-                        Icon(
-                            imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                            contentDescription = "F11 全屏",
-                            tint = primaryInk,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
                     }
                 }
             }
@@ -4667,6 +4730,7 @@ private fun UnifiedImmersiveStage(
                     currentSong = song,
                     allSongs = allSongs,
                     vinylRotation = vinylRotation,
+                    vinylRotationProvider = vinylRotationProvider,
                     lyrics = lyrics,
                     activeLyricIdx = activeLyricIdx,
                     accentColor = activeAccent,
@@ -4814,6 +4878,7 @@ private fun UnifiedImmersiveStage(
                                         DesktopSpinningVinylDisc(
                                             filePath = song.filePath,
                                             rotationDegrees = vinylRotation,
+                                            rotationProvider = vinylRotationProvider,
                                             discSize = discSize,
                                             modifier = Modifier
                                                 .align(Alignment.TopEnd)
@@ -4859,7 +4924,7 @@ private fun UnifiedImmersiveStage(
                             DesktopMultiLineScrollingLyrics(
                                 lyrics = lyrics,
                                 activeIdx = activeLyricIdx,
-                                positionMs = playerState.positionMs + lyricOffsetMs,
+                                positionMs = positionMsProvider() + lyricOffsetMs,
                                 isPlaying = playerState.isPlaying,
                                 karaokeMode = karaokeLyricMode,
                                 activeColor = primaryInk,
@@ -4877,7 +4942,7 @@ private fun UnifiedImmersiveStage(
                             if (showSpectrum) {
                                 DesktopLiveSpectrumBar(
                                     songId = song.id,
-                                    positionMs = playerState.positionMs,
+                                    positionMs = positionMsProvider(),
                                     durationMs = playerState.durationMs,
                                     isPlaying = playerState.isPlaying,
                                     spectrumStyle = spectrumStyle,
@@ -4981,6 +5046,7 @@ private fun UnifiedImmersiveStage(
         if (!isSplitMode) {
             UnifiedBottomControlRail(
                 playerState = playerState,
+                positionMsProvider = positionMsProvider,
                 isFavorite = isFavorite,
                 isImmersive = true,
                 isDarkSurface = isDarkScene,
