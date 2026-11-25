@@ -810,10 +810,10 @@ fun DesktopSpatialRecordGallery(
             },
         contentAlignment = Alignment.Center,
     ) {
-        val frontSize = min(maxWidth * 0.56f, maxHeight * 0.64f).coerceIn(210.dp, 460.dp)
-        val corridorW = frontSize * 1.44f
-        val corridorH = frontSize * 1.32f
-        val baseY = 20.dp
+        val frontSize = min(maxWidth * 0.62f, maxHeight * 0.84f).coerceIn(210.dp, 440.dp)
+        val corridorW = frontSize * 1.42f
+        val corridorH = frontSize + 6.dp
+        val baseY = 6.dp
         val dynamicRotY = 17f + (dragOffsetX.value * 0.06f).coerceIn(-7f, 7f)
         val camDist = 7.5f * density
 
@@ -1705,6 +1705,7 @@ fun DesktopLiveSpectrumBar(
     timestampColor: Color,
     onSeekTo: (Long) -> Unit,
     stageHeightDp: Dp = 92.dp,
+    compactInline: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val barCount = DesktopSpectrumBus.BAND_COUNT
@@ -2249,9 +2250,11 @@ fun DesktopLiveSpectrumBar(
                 }
             }
         }
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatDuration(displayPosMs), fontSize = 11.sp, color = timestampColor)
-            Text(formatDuration(durationMs), fontSize = 11.sp, color = timestampColor)
+        if (!compactInline) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(formatDuration(displayPosMs), fontSize = 11.sp, color = timestampColor)
+                Text(formatDuration(durationMs), fontSize = 11.sp, color = timestampColor)
+            }
         }
     }
 }
@@ -3264,9 +3267,71 @@ fun DesktopMultiLineScrollingLyrics(
 
 
 // =================================================================================================
-// UNIFIED PRECISION BOOKBINDING HARDWARE COMPONENT SYSTEM (v4.3.0)
-// Shared across Library, Albums, Playlists, Settings & Studio Customizer (Light Washi + Night Slate)
+// UNIFIED LIQUID GLASS & QUIET-LUXURY COMPONENT SYSTEM (v4.5.0)
+// Shared across Library, Albums, Playlists, Stats, Settings & Immersive Stage (All 8 Themes)
 // =================================================================================================
+
+data class DesktopGlassTheme(
+    val enabled: Boolean = true,
+    val level: DesktopLiquidGlassLevel = DesktopLiquidGlassLevel.MEDIUM,
+    val isDark: Boolean = false,
+    val accent: Color = Color(0xFF4F728A),
+)
+
+val LocalDesktopGlass = androidx.compose.runtime.compositionLocalOf { DesktopGlassTheme() }
+
+@Composable
+fun Modifier.desktopLiquidGlass(
+    shape: RoundedCornerShape = RoundedCornerShape(14.dp),
+    elevated: Boolean = false,
+): Modifier {
+    val g = LocalDesktopGlass.current
+    val surf = MaterialTheme.colorScheme.surface
+    val outline = MaterialTheme.colorScheme.outline
+    if (!g.enabled) {
+        val bCol = if (g.isDark) Color.White.copy(alpha = 0.11f) else outline.copy(alpha = 0.85f)
+        return this
+            .clip(shape)
+            .background(surf)
+            .border(0.8.dp, bCol, shape)
+    }
+    val strength = when (g.level) {
+        DesktopLiquidGlassLevel.LOW -> 0.72f
+        DesktopLiquidGlassLevel.MEDIUM -> 1.00f
+        DesktopLiquidGlassLevel.HIGH -> 1.28f
+    }
+    val topAlpha = if (g.isDark) (if (elevated) 0.68f else 0.56f) / strength.coerceAtLeast(0.8f) else (if (elevated) 0.86f else 0.76f)
+    val botAlpha = if (g.isDark) (if (elevated) 0.54f else 0.42f) / strength.coerceAtLeast(0.8f) else (if (elevated) 0.70f else 0.60f)
+    val sheenTop = if (g.isDark) Color.White.copy(alpha = (0.095f * strength).coerceAtMost(0.16f)) else Color.White.copy(alpha = (0.52f * strength).coerceAtMost(0.75f))
+    val sheenBot = if (g.isDark) g.accent.copy(alpha = (0.045f * strength).coerceAtMost(0.10f)) else Color.White.copy(alpha = 0.12f)
+    val rimTop = if (g.isDark) Color.White.copy(alpha = (0.26f * strength).coerceAtMost(0.38f)) else Color.White.copy(alpha = 0.88f)
+    val rimMid = if (g.isDark) g.accent.copy(alpha = (0.14f * strength).coerceAtMost(0.24f)) else outline.copy(alpha = 0.45f)
+    val rimBot = if (g.isDark) Color.White.copy(alpha = 0.06f) else outline.copy(alpha = 0.55f)
+    return this
+        .clip(shape)
+        .background(
+            Brush.verticalGradient(
+                0.00f to surf.copy(alpha = topAlpha.coerceIn(0.34f, 0.90f)),
+                1.00f to surf.copy(alpha = botAlpha.coerceIn(0.26f, 0.82f)),
+            ),
+        )
+        .background(
+            Brush.verticalGradient(
+                0.00f to sheenTop,
+                0.42f to Color.Transparent,
+                1.00f to sheenBot,
+            ),
+        )
+        .border(
+            width = 0.9.dp,
+            brush = Brush.verticalGradient(
+                0.00f to rimTop,
+                0.45f to rimMid,
+                1.00f to rimBot,
+            ),
+            shape = shape,
+        )
+}
 
 @Composable
 fun BookbindingCard(
@@ -3278,13 +3343,14 @@ fun BookbindingCard(
 ) {
     val shape = RoundedCornerShape(cornerRadius)
     val isDark = MaterialTheme.colorScheme.background.red < 0.35f
-    val borderCol = if (isDark) Color(0xFFFFFAF0).copy(alpha = 0.11f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.85f)
     Column(
         modifier = modifier
-            .shadow(elevation = if (isDark) elevation * 0.6f else elevation, shape = shape, ambientColor = Color.Black.copy(alpha = if (isDark) 0.35f else 0.08f))
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(0.8.dp, borderCol, shape)
+            .shadow(
+                elevation = if (isDark) elevation * 0.8f else elevation,
+                shape = shape,
+                ambientColor = Color.Black.copy(alpha = if (isDark) 0.36f else 0.09f),
+            )
+            .desktopLiquidGlass(shape = shape, elevated = false)
             .padding(contentPadding),
         content = content,
     )

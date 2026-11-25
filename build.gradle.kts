@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.puremusic.desktop"
-version = "4.4.2"
+version = "4.5.0"
 
 dependencies {
     implementation(compose.desktop.currentOs)
